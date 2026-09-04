@@ -1,405 +1,326 @@
 <div align=center>
 <img src="static/logo.svg" alt="We-MP-RSS Logo" width="20%">
-<h1>WeRSS - 微信公众号订阅助手</h1>
+<h1>WeRSS — 微信公众号订阅助手</h1>
 
-[![Python Version](https://img.shields.io/badge/python-3.13.1+-red.svg)]()
+[![Python](https://img.shields.io/badge/python-3.13.1+-red.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-green.svg)]()
+[![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)]()
 
-[中文](README.zh-CN.md)|[English](ReadMe.md)
+[中文](README.zh-CN.md) | [English](ReadMe.md)
 
-快速运行
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rachelos/we-mp-rss:latest
-```
-http://<您的ip>:8001/  即可开启
-
-# 快速升级 
-
-```
-docker stop we-mp-rss
-docker rm we-mp-rss
-docker pull ghcr.io/rachelos/we-mp-rss:latest
-# 如果添加了其它参数，请自行修改
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rachelos/we-mp-rss:latest
-```
-
-# 官方镜像
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  rachelos/we-mp-rss:latest
-```
-# 代理镜像加速访问（国内访问速度更快）
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  docker.1ms.run/rachelos/we-mp-rss:latest  
-```
-
-# 感谢伙伴(排名不分先后)
- cyChaos、 子健MeLift、 晨阳、 童总、 胜宇、 军亮、 余光、 一路向北、 水煮土豆丝、 人可、 须臾、 澄明
-、五梭
-
-
-
-
- <br/>
- <img src="https://github.com/user-attachments/assets/cbe924f2-d8b0-48b0-814e-7c06ccb1911c" height="60" />
-    <img src="https://github.com/user-attachments/assets/6997a236-3df3-49d5-98a4-514f6d1a02c4" height="60" />
-    <br />
-    <br />
-    <a href="https://github.com/RSSNext/Folo/stargazers"><img src="https://img.shields.io/github/stars/RSSNext/Follow?color=ffcb47&labelColor=black&style=flat-square&logo=github&label=Stars" /></a>
-    <a href="https://github.com/RSSNext/Folo/graphs/contributors"><img src="https://img.shields.io/github/contributors/RSSNext/Folo?style=flat-square&logo=github&label=Contributors&labelColor=black" /></a>
-    <a href="https://status.follow.is/" target="_blank"><img src="https://status.follow.is/api/badge/18/uptime?color=%2344CC10&labelColor=black&style=flat-square"/></a>
-    <a href="https://github.com/RSSNext/Folo/releases"><img src="https://img.shields.io/github/downloads/RSSNext/Folo/total?color=369eff&labelColor=black&logo=github&style=flat-square&label=Downloads" /></a>
-    <a href="https://x.com/intent/follow?screen_name=folo_is"><img src="https://img.shields.io/badge/Follow-blue?color=1d9bf0&logo=x&labelColor=black&style=flat-square" /></a>
-    <a href="https://discord.gg/followapp" target="_blank"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2Ffollowapp%3Fwith_counts%3Dtrue&query=approximate_member_count&color=5865F2&label=Discord&labelColor=black&logo=discord&logoColor=white&style=flat-square"/></a>
-    <br />
-一个用于订阅和管理微信公众号内容的工具，提供RSS订阅功能。
+自托管的微信公众号内容订阅与 RSS 生成工具。自 1.6 起数据层已脱离微信公众平台
+—— 无需扫码授权、可无人值守运行。
 </div>
 
-> **⚠️ 重要重构说明（自 1.6 起）**
->
-> 已重构微信公众号数据获取层：
-> - **公众号信息与文章列表**改用 [redfox](https://redfox.hk) 数据接口（`/story/api/gzh/data/accountInfo` 与 `/queryWorkList`），替换原 `mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish` 接口。原链路因长期扫码会话频繁触发风控（`base_resp.ret = 200013` / `200003`），稳定性较差。
-> - **文章正文（获取正文）** 仍沿用原项目方式 —— `driver.wxarticle.Web.get_article_content`（基于 Playwright 抓取），未做改动。
->
-> 配置方式：通过环境变量 `REDFOX_API_KEY` 或 `config.yaml`（`redfox.api_key`）注入 API Key。详细文档：[docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md)。
+---
+
+## 快速开始（Docker）
+
+镜像发布在阿里云个人版仓库：
+
+```bash
+docker run -d --name we-mp-rss \
+  -p 8001:8001 \
+  -v ./data:/app/data \
+  --env-file ./.env \
+  crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0
+```
+
+浏览器访问 `http://<你的 IP>:8001/`。默认账号 `admin` / `admin@123`，**首次
+登录后请立即修改密码**（右上角用户菜单 → 修改密码）。
+
+镜像**不**携带 `REDFOX_API_KEY`，通过 `.env` 注入：
+
+```bash
+# .env（一行一个 key，不要加引号）
+REDFOX_API_KEY=ak_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+## 升级
+
+```bash
+docker stop we-mp-rss && docker rm we-mp-rss
+docker pull crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0
+# 重新执行上面那条 docker run（data/ 挂在宿主机，数据不会丢）
+```
+
+## v2.0.0 — Redfox 迁移（自 1.6 起）
+
+微信公众号的数据层已重写为调用 [redfox.hk](https://redfox.hk) 无状态 REST
+接口。原扫码会话链路（`mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish`
++ cookie/token 管理）已完全移除。
+
+| 用途 | 端点 | 对应方法 |
+| --- | --- | --- |
+| 按关键词搜索公众号 | `/story/api/gzh/data/searchUser` | `search_user` |
+| 按 ID 精确查询公众号 | `/story/api/gzh/data/accountInfo` | `get_account_info` |
+| 拉取公众号作品列表 | `/story/api/gzh/data/queryWorkList` | `query_work_list` |
+| 文章正文（HTML） | `driver.wxarticle.Web.get_article_content` | Playwright 抓取（未变） |
+
+**配置**：
+
+- `REDFOX_API_KEY`（环境变量）或 `redfox.api_key`（配置文件）— 必填。
+  在 [redfox.hk/settings/api-keys](https://redfox.hk/settings/api-keys) 申请。
+- `REDFOX_BASE_URL`（环境变量，默认 `https://redfox.hk`）— 覆盖 redfox 入口。
+
+每一次 redfox 调用都会记录到 Redis，可通过后台 **系统 → Redfox 日志** 查看
+（含响应码、耗时、错误信息），便于排查。
+
+完整模块映射见 [docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md)。
 
 ## 功能特性
 
-- 微信公众号内容抓取和解析
-- RSS订阅生成
-- 用户友好的Web管理界面
-- 定时自动更新内容
-- 支持多种数据库（默认SQLite，可选MySQL）
-- 支持多种抓取方式
-- 支持多种RSS客户端
-- 支持授权过期提醒
-- 支持自定义通知渠道
-- 支持自定义RSS标题、描述、封面
-- 支持自定义RSS分页大小
-- 支持导出md/docx/pdf/json格式
-- 支持API接口调用/WebHook调用
-- 支持HTML内容过滤规则（全局规则和公众号专属规则）
-- 支持多主题切换（13种主题：默认紫色、清新蓝色、自然绿色、活力橙色、玫瑰红、青碧色、樱花粉、靛青色、紫罗兰、咖啡棕、深海蓝、深色模式、护眼模式）
-- 支持响应式分页（PC端点击翻页，移动端加载更多按钮）
-- **级联系统**：支持父子节点架构，智能任务分发，扩展采集能力
-- **环境异常统计**：自动统计微信公众号文章获取时的环境异常情况
-- **Headers和Cookies认证**：消息任务支持自定义Headers和Cookies，用于需要认证的WebHook调用
-- **配置缓存**：支持Redis、Memcached和内存缓存，提升配置读取性能
-- **Redfox 数据接口**：公众号信息与文章列表改用无状态的 redfox REST 接口，不再依赖扫码会话
-<p align="center">
-  <a href="https://github.com/DIYgod/sponsors">
-    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
-  </a>
-</p>
-
-
-# ❤️ 赞助
-如果觉得 We-MP-RSS 对你有帮助，欢迎给我来一杯啤酒！<br/>
-<img src="docs/赞赏码.jpg" width=180/>
-[Paypal](https://www.paypal.com/ncp/payment/PUA72WYLAV5KW)
+- 微信公众号内容抓取与解析
+- RSS 订阅源生成（RSS 2.0，支持 CDATA / 全文 / 封面）
+- Web 管理后台（Vue 3 + Arco Design + Vite）
+- 定时自动更新（间隔可配）
+- SQLite（默认）/ MySQL / PostgreSQL 数据库
+- 多种抓取模型（`app` / `web` / `api`）—— 见 `core/wx/model/`
+- 自定义 RSS 标题、描述、封面、分页大小
+- 自定义通知渠道（钉钉 / 微信群机器人 / 飞书 / 自定义 Webhook）
+- HTML 内容过滤规则（全局 + 公众号专属）
+- 导出 Markdown / DOCX / PDF / JSON
+- 13 套主题（含深色 / 护眼模式）
+- 响应式分页（PC 翻页、移动端加载更多）
+- **级联系统** — 父子节点架构，分布式采集
+- **环境异常统计** — 自动追踪各订阅的抓取失败
+- **Headers / Cookies 认证** — 用于需要鉴权的 Webhook 调用
+- **配置缓存** — Redis / Memcached / 内存三级
+- **Access Key (AK) 认证** — 程序化 API 访问（`Authorization: AK-SK {ak}:{sk}`）
+- **Redfox 数据接口** — 无状态获取公众号信息与作品列表
 
 ## 界面截图
+
 - 登录界面  
-<img src="docs/登录.png" alt="登录" width="80%"/><br/>
+  <img src="docs/登录.png" alt="登录" width="80%"/><br/>
 - 主界面  
-<img src="docs/主界面.png" alt="主界面" width="80%"/><br/>
-- 扫码授权  
-<img src="docs/扫码授权.png" alt="扫码授权" width="80%"/><br/>
-- 添加订阅  
-<img src="docs/添加订阅.png" alt="添加订阅" width="80%"/><br/>
-
-- 客户端应用<br/>
-<img src="docs/folo.webp" alt="FOLO客户端应用" width="80%"/><br/>
-
-
+  <img src="docs/主界面.png" alt="主界面" width="80%"/><br/>
+- 添加订阅（已切换为 redfox 搜索）  
+  <img src="docs/添加订阅.png" alt="添加订阅" width="80%"/><br/>
 
 ## 系统架构
 
-项目采用前后端分离架构：
-- 后端：Python + FastAPI
-- 前端：Vue 3 + Vite
-- 数据库：SQLite (默认)/MySQL
-<img src="docs/架构原理.png" alt="架构原理" width="80%"/>
+前后端分离，后端将预编译的前端作为静态资源提供：
 
-更多项目原理，请参考[项目文档](https://deepwiki.com/rachelos/we-mp-rss/3.5-notification-system)。
+- 后端：Python 3.13 + FastAPI + Uvicorn
+- 前端：Vue 3 + Vite 8 + rolldown
+- 数据库：SQLite（默认）/ MySQL / PostgreSQL
+- 缓存：Redis（可选，Redfox 日志 / 多 worker 会话需要）
+- 任务队列：进程内默认，级联场景走 Redis
 
-## 安装指南
+```
+┌──────────────┐    ┌────────────────────────────────────┐
+│  Vue 3 SPA   │    │  FastAPI (uvicorn, port 8001)      │
+│  (static/)   │◄──►│  ├─ /api/v1/wx  (article/feed/...) │
+└──────────────┘    │  ├─ /api/v1/wx/redfox  (stats/logs)│
+                    │  └─ /story/api/gzh/data/... (redfox)│
+                    └────────────┬───────────────────────┘
+                                 │
+                ┌────────────────┼────────────────┐
+                ▼                ▼                ▼
+           SQLite/MySQL     Redis (logs,    redfox.hk
+                            cache, queue)
+```
 
-# 二次开发
-## 环境需求
-- Python>=3.13.1
-- Node>=20.18.3
-### 后端服务
+## 安装（开发环境）
 
-1. 克隆项目
+### 环境要求
+
+- Python ≥ 3.13.1
+- Node ≥ 20.18.3
+
+### 后端
+
 ```bash
-git clone https://github.com/rachelos/we-mp-rss.git
+git clone <你的 fork 仓库> we-mp-rss
 cd we-mp-rss
-```
-
-2. 安装Python依赖
-```bash
 pip install -r requirements.txt
-```
-
-3. 配置数据库
-复制并修改配置文件：
-```bash
 cp config.example.yaml config.yaml
-copy config.example.yaml config.yaml
-```
-3. 启动服务
-```bash
+cp .env.example .env       # 填入 REDFOX_API_KEY
 python main.py -job True -init True
 ```
 
-## 前端开发
-1. 安装前端依赖
+`-init` 标志会创建 SQLite 数据库与默认 admin 账号；`-job` 开启定时任务。
+`main.py` 通过 `load_dotenv()` 自动加载 `.env`（方便本地直接运行）；在
+Docker 部署中应通过 compose 的 `env_file:` 注入。
+
+后端通过 `static/` 目录为前端页面提供静态资源。
+
+### 前端
+
 ```bash
-cd we-mp-rss/web_ui
-yarn install
+cd web_ui
+npm install --legacy-peer-deps
+npm run dev          # http://localhost:3000
 ```
 
-2. 启动前端服务
+### 生产构建（同步 static/）
+
+后端实际服务的是 `static/` 目录里的**预编译产物**。Dockerfile 头部的注释也
+写明：「前端编译非常占用工作流时间 ,可以 编译后复制到static目录再提交pull
+request」。标准构建顺序：
+
 ```bash
-yarn dev
-```
-3. 访问前端页面
-```
-http://localhost:3000
+# 1. 编译前端
+cd web_ui && npm run build && cd ..
+
+# 2. 同步 dist/ → static/（这是后端实际服务的目录）
+rsync -a --delete web_ui/dist/ static/
+
+# 3. 构建 Docker 镜像
+docker buildx build --platform=linux/amd64 \
+  -f ./Dockerfile \
+  -t crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0 \
+  .
 ```
 
-# 环境变量配置
+> 镜像**不**包含 `.env` —— `.dockerignore` 已排除。运行时通过 `env_file:`
+> 或 `-e` 注入 `REDFOX_API_KEY`。
 
-以下是 `config.yaml` 中支持的环境变量配置：
+## 环境变量
 
-| 环境变量 | 默认值 | 描述 |
-|----------|--------|------|
-| `APP_NAME` | `we-mp-rss` | 应用名称 |
-| `SERVER_NAME` | `we-mp-rss` | 服务名称 |
-| `WEB_NAME` | `WeRSS微信公众号订阅助手` | 前端显示名称 |
-| `WERSS_AUTH_WEB` | `False` | 通过web方式授权 |
-| `BROWSER_TYPE` | `firefox` | 浏览器类型默认firefox |
-| `SEND_CODE` | `True` | 是否发送授权二维码通知 |
-| `CODE_TITLE` | `WeRSS授权二维码` | 二维码通知标题 |
+所有变量由 `core/config.py` 解析，支持 `config.yaml` 中的 `${VAR:-default}`
+语法或操作系统环境变量。
+
+| 变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `APP_NAME` | `we-mp-rss` | 应用名 |
+| `SERVER_NAME` | `we-mp-rss` | 服务名 |
+| `WEB_NAME` | `WeRSS微信公众号订阅助手` | 前端显示名 |
 | `ENABLE_JOB` | `True` | 是否启用定时任务 |
-| `AUTO_RELOAD` | `False` | 代码修改自动重启服务 |
-| `THREADS` | `2` | 最大线程数 |
-| `DB` | `sqlite:///data/db.db` | 数据库连接字符串 |
-| `DINGDING_WEBHOOK` | 空 | 钉钉通知Webhook地址 |
-| `WECHAT_WEBHOOK` | 空 | 微信通知Webhook地址 |
-| `FEISHU_WEBHOOK` | 空 | 飞书通知Webhook地址 |
-| `CUSTOM_WEBHOOK` | 空 | 自定义通知Webhook地址 |
-| `SECRET_KEY` | `we-mp-rss` | 密钥 |
-| `USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36/WeRss` | 用户代理 |
+| `AUTO_RELOAD` | `False` | uvicorn `--reload`（开发用） |
+| `THREADS` | `2` | uvicorn worker 数 |
+| `DB` | `sqlite:///data/db.db` | 数据库连接串 |
+| `REDFOX_API_KEY` | — | **必填**。redfox.hk API Key |
+| `REDFOX_BASE_URL` | `https://redfox.hk` | redfox API 入口 |
+| `DINGDING_WEBHOOK` | 空 | 钉钉通知 Webhook |
+| `WECHAT_WEBHOOK` | 空 | 微信群机器人 Webhook |
+| `FEISHU_WEBHOOK` | 空 | 飞书 Webhook |
+| `CUSTOM_WEBHOOK` | 空 | 自定义 Webhook |
+| `SECRET_KEY` | `we-mp-rss` | JWT 签名密钥 —— **生产环境务必修改** |
+| `USER_AGENT` | `Mozilla/...` | 出站请求的 User-Agent |
 | `SPAN_INTERVAL` | `10` | 定时任务执行间隔（秒） |
-| `WEBHOOK.CONTENT_FORMAT` | `html` | 文章内容发送格式 |
-| `PORT` | `8001` | API服务端口 |
+| `WEBHOOK.CONTENT_FORMAT` | `html` | 通知中文章正文的格式 |
+| `PORT` | `8001` | API 端口 |
 | `DEBUG` | `False` | 调试模式 |
-| `MAX_PAGE` | `5` | 最大采集页数 |
-| `RSS_BASE_URL` | 空 | RSS域名地址 |
-| `RSS_LOCAL` | `False` | 是否为本地RSS链接 |
-| `RSS_TITLE` | 空 | RSS标题 |
-| `RSS_DESCRIPTION` | 空 | RSS描述 |
-| `RSS_COVER` | 空 | RSS封面 |
-| `RSS_FULL_CONTEXT` | `True` | 是否显示全文 |
-| `RSS_ADD_COVER` | `True` | 是否添加封面图片 |
-| `RSS_CDATA` | `False` | 是否启用CDATA |
-| `RSS_PAGE_SIZE` | `30` | RSS分页大小 |
-| `TOKEN_EXPIRE_MINUTES` | `4320` | 登录会话有效时长（分钟） |
+| `MAX_PAGE` | `5` | 单次抓取最大页数 |
+| `RSS_BASE_URL` | 空 | RSS 公网域名 |
+| `RSS_LOCAL` | `False` | 使用本地 RSS 链接而非 `RSS_BASE_URL` |
+| `RSS_TITLE` | 空 | 覆盖 feed 标题 |
+| `RSS_DESCRIPTION` | 空 | 覆盖 feed 描述 |
+| `RSS_COVER` | 空 | 覆盖 feed 封面 |
+| `RSS_FULL_CONTEXT` | `True` | 是否在 feed 中包含全文 |
+| `RSS_ADD_COVER` | `True` | 是否在 feed item 中插入封面 |
+| `RSS_CDATA` | `False` | 正文用 `<![CDATA[]]>` 包裹 |
+| `RSS_PAGE_SIZE` | `30` | feed 单页条数 |
+| `TOKEN_EXPIRE_MINUTES` | `4320` | 登录会话有效期（分钟） |
 | `CACHE.DIR` | `./data/cache` | 缓存目录 |
-| `ARTICLE.TRUE_DELETE` | `False` | 是否真实删除文章 |
-| `GATHER.CONTENT` | `True` | 是否采集内容 |
-| `GATHER.MODEL` | `app` | 采集模式 |
-| `GATHER.CONTENT_AUTO_CHECK` | `False` | 是否自动检查未采集文章内容 |
-| `GATHER.CONTENT_AUTO_INTERVAL` | `59` | 自动检查未采集文章内容的时间间隔（分钟） |
+| `ARTICLE.TRUE_DELETE` | `False` | 物理删除 vs 软删除 |
+| `GATHER.CONTENT` | `True` | 是否采集正文 |
+| `GATHER.MODEL` | `app` | 采集模型（`app` / `web` / `api`） |
+| `GATHER.CONTENT_AUTO_CHECK` | `False` | 定期回填缺失的正文 |
+| `GATHER.CONTENT_AUTO_INTERVAL` | `59` | 回填间隔（分钟） |
 | `GATHER.CONTENT_MODE` | `web` | 内容修正模式 |
-| `SAFE_HIDE_CONFIG` | `db,secret,token,notice.wechat,notice.feishu,notice.dingding` | 需要隐藏的配置信息 |
-| `SAFE_LIC_KEY` | `RACHELOS` | 授权加密KEY |
-| `LOG_FILE` | 空 | 日志文件路径 |
+| `SAFE_HIDE_CONFIG` | `db,secret,token,notice.wechat,notice.feishu,notice.dingding` | 系统信息页中隐藏的 key |
+| `LOG_FILE` | 空 | 日志文件路径（空则输出到 stdout） |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
-| `EXPORT_PDF` | `False` | 是否启用PDF导出功能 |
-| `EXPORT_PDF_DIR` | `./data/pdf` | PDF导出目录 |
-| `EXPORT_MARKDOWN` | `False` | 是否启用markdown导出功能 |
-| `EXPORT_MARKDOWN_DIR` | `./data/markdown` | markdown导出目录 |
-
-# 使用说明
-
-1. 启动服务后，访问 `http://<您的IP>:8001` 进入管理界面。
-2. 使用微信扫码授权后，即可添加和管理订阅。
-3. 定时任务会自动更新内容，并生成RSS订阅链接。
+| `EXPORT_PDF` | `False` | 是否启用 PDF 导出 |
+| `EXPORT_PDF_DIR` | `./data/pdf` | PDF 输出目录 |
+| `EXPORT_MARKDOWN` | `False` | 是否启用 Markdown 导出 |
+| `EXPORT_MARKDOWN_DIR` | `./data/markdown` | Markdown 输出目录 |
 
 ## Access Key 认证
 
-WeRSS 支持使用 Access Key (AK) 进行 API 认证，适用于程序化访问和自动化脚本。
+用于程序化访问 API，避免暴露管理员密码。
 
-### 创建 Access Key
+### 创建 AK
 
-1. 登录 WeRSS 管理界面
-2. 进入"Access Key 管理"页面
-3. 点击"创建 Access Key"按钮
-4. 填写名称、描述、权限和过期时间
-5. 创建成功后，妥善保存 Access Key 和 Secret Key（Secret Key 只显示一次）
+1. 登录后台，左侧菜单 → **Access Key 管理**
+2. 点击 **创建 Access Key**
+3. 填写名称、描述、权限、过期时间
+4. **妥善保存 Access Key 与 Secret**（Secret 仅展示一次）
 
-### 使用 Access Key 调用 API
-
-在请求头中添加 `Authorization` 字段，格式为 `AK-SK {access_key}:{secret_key}`：
+### 使用 AK
 
 ```bash
-curl -H "Authorization: AK-SK your_access_key:your_secret_key" \
+curl -H "Authorization: AK-SK {access_key}:{secret_key}" \
      http://localhost:8001/api/feeds
 ```
 
-#### Python 示例
-
 ```python
 import requests
-
-access_key = "your_access_key"
-secret_key = "your_secret_key"
-base_url = "http://localhost:8001"
-
-headers = {
-    "Authorization": f"AK-SK {access_key}:{secret_key}"
-}
-
-# 获取订阅列表
-response = requests.get(f"{base_url}/api/feeds", headers=headers)
-print(response.json())
+r = requests.get(
+    "http://localhost:8001/api/feeds",
+    headers={"Authorization": f"AK-SK {access_key}:{secret_key}"},
+)
+print(r.json())
 ```
 
-#### JavaScript 示例
-
-```javascript
-const accessKey = "your_access_key";
-const secretKey = "your_secret_key";
-const baseUrl = "http://localhost:8001";
-
-const headers = {
-  "Authorization": `AK-SK ${accessKey}:${secretKey}`
-};
-
-// 获取订阅列表
-fetch(`${baseUrl}/api/feeds`, { headers })
-  .then(res => res.json())
-  .then(data => console.log(data));
-```
-
-详细文档请参考：[AK 认证指南](docs/AK_Authentication_Guide.md)
+详细文档：[docs/AK_Authentication_Guide.md](docs/AK_Authentication_Guide.md)。
 
 ## HTML 内容过滤规则
 
-WeRSS 支持自定义 HTML 内容过滤规则，可以在采集文章内容时自动清理不需要的元素，如广告、推荐链接等。
+抓取正文时按规则清理广告、推荐位等无用元素，支持全局或按公众号粒度配置。
 
-### 功能特点
-
-- **全局规则**：不指定公众号时，规则对所有公众号生效
-- **公众号专属规则**：可以为特定公众号或多个公众号配置不同的过滤规则
-- **优先级控制**：支持设置规则优先级，数值越大越先执行
-- **多种过滤方式**：
-  - 按 ID 移除元素
-  - 按 CSS Class 移除元素
-  - 按 CSS 选择器移除元素
-  - 按属性过滤元素
-  - 按正则表达式移除内容
-  - 移除常见 HTML 元素（script、style、注释等）
-
-### 使用方法
-
-1. 登录管理界面，进入「过滤规则」页面
-2. 点击「添加过滤规则」
-3. 配置规则：
-   - **选择公众号**：可选多个公众号，不选择则为全局规则
-   - **规则名称**：便于识别的规则名称
-   - **优先级**：数值越大优先级越高（0-100）
-   - **过滤配置**：
-     - 移除 ID 元素：每行一个 ID，如 `ad-banner`
-     - 移除 Class 元素：每行一个 class，如 `ad-container`
-     - CSS 选择器：如 `div.ad-wrapper`、`.recommend-list > li`
-     - 属性过滤：如 `data-type="ad"`
-     - 正则表达式：用于精确匹配和移除内容
-
-### 示例配置
-
-#### 全局广告过滤规则
-```
-规则名称：全局广告清理
-公众号：不选择（全局规则）
-优先级：10
-移除 ID：ad-banner、footer-nav
-移除 Class：ad-container、recommend-box
-CSS 选择器：div.ad-wrapper、.recommend-list > li
-移除常见 HTML 元素：开启
-```
-
-#### 特定公众号规则
-```
-规则名称：某公众号专属过滤
-公众号：选择特定公众号
-优先级：20（高于全局规则，会先执行）
-移除 Class：custom-ad、special-banner
-```
-
-### API 接口
-
-过滤规则支持完整的 REST API 操作：
+- **作用域**：全局（不指定 `mp_id`）或公众号专属
+- **优先级**：0-100，数值越大越先执行
+- **过滤方式**：
+  - 按 HTML `id` 移除
+  - 按 CSS `class` 移除
+  - 按 CSS 选择器移除
+  - 按属性过滤（如 `data-type="ad"`）
+  - 按正则表达式移除
+  - 剥离常见元素（`<script>`、`<style>`、注释等）
 
 ```bash
-# 获取过滤规则列表
-GET /api/filter-rules
+# 列表
+GET    /api/filter-rules
 
-# 创建过滤规则
-POST /api/filter-rules
+# 新建
+POST   /api/filter-rules
 {
-  "mp_id": "[]",  // 空数组表示全局规则
-  "rule_name": "全局广告过滤",
+  "mp_id": "[]",                  # "[]" 表示全局
+  "rule_name": "全局广告清理",
+  "priority": 10,
   "remove_ids": ["ad-banner"],
-  "remove_classes": ["ad-container"],
-  "priority": 10
+  "remove_classes": ["ad-container"]
 }
 
-# 更新过滤规则
-PUT /api/filter-rules/{rule_id}
-
-# 删除过滤规则
-DELETE /api/filter-rules/{rule_id}
+# 更新 / 删除
+PUT    /api/filter-rules/{id}
+DELETE /api/filter-rules/{id}
 ```
 
-# 常见问题
+## 常见问题
 
-- **如何修改数据库连接？**
-  在 `config.yaml` 中修改 `db` 配置项，或通过环境变量 `DB` 覆盖。
+**默认账号密码？** `admin` / `admin@123`，首次登录后请立即修改。
 
-- **如何启用钉钉通知？**
-  在 `config.yaml` 中填写 `notice.dingding` 或通过环境变量 `DINGDING_WEBHOOK` 设置。
+**`/mps/search` 没结果？** redfox.hk 公共库只收录热门公众号。冷门账号请在添加
+订阅时直接粘贴 `fakeid`（Base64 编码的 `bizInfo`）或 `wxId`。
 
-- **如何调整定时任务间隔？**
-  修改 `config.yaml` 中的 `interval` 或通过环境变量 `SPAN_INTERVAL` 设置。
+**去哪里申请 `REDFOX_API_KEY`？** 在
+[redfox.hk](https://redfox.hk?source=redfox_api_md) 注册后到
+[API Keys](https://redfox.hk/settings/api-keys?source=redfox_api_md) 创建。
 
-- **如何开启定时任务？**
-  1、修改 `config.yaml` 中的 `ENABLE_JOB` 或通过环境变量 `ENABLE_JOB` 设置 为True。
-  2、在UI界面的消息任务中，添加定时任务。
-  
-- **如何修改文章内容发送格式？**
-  修改 `config.yaml` 中的 `WEBHOOK.CONTENT_FORMAT` 或通过环境变量 `WEBHOOK.CONTENT_FORMAT` 设置。
+**拉了新镜像后后台界面没变化？** 后端服务的是 `static/` 里的预编译产物，如果
+只更新镜像但没重建 `web_ui/dist/ → static/`，UI 仍是旧版。请按上文
+**生产构建** 一节重新执行三步。
 
-- **默认帐号、密码是多少？**
-  - 默认帐号：admin
-  - 默认密码：admin@123
+**搜索返回空但 Redfox 日志也是空的？** `REDFOX_API_KEY 未配置` 是在
+`_headers()` 阶段抛出的（在 `_post()` 之前），不会写日志。请看 uvicorn
+stdout 或后台「系统信息」页里的 redfox 状态块。
 
-- **数据库连接串示例**
-  - 调整环境变量DB为您的数据库连接字符串。
-  - SQLite 连接示例: 
-  ```
-  sqlite:///data/db.db
-  ```
-  - PostgreSQL 连接示例: 
-  ```
-  postgresql://<username>:<password>@<host>/<database>
-  ```
-  - MySQL 连接示例:
-  ```
-  mysql+pymysql://<username>:<password>@<host>/<database>?charset=utf8mb4
-  ```
+**怎么改数据库？** 设置 `DB` 环境变量或编辑 `config.yaml` 的 `db:`：
 
+```ini
+# SQLite
+DB=sqlite:///data/db.db
+# MySQL
+DB=mysql+pymysql://<user>:<password>@<host>/<db>?charset=utf8mb4
+# PostgreSQL
+DB=postgresql://<user>:<password>@<host>/<db>
+```
 
-[Star History Chart]: https://api.star-history.com/svg?repos=rachelos/we-mp-rss&type=Timeline
+## 许可
+
+MIT

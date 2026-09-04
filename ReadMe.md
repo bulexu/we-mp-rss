@@ -1,274 +1,338 @@
 <div align=center>
 <img src="static/logo.svg" alt="We-MP-RSS Logo" width="20%">
-<h1>WeRSS - WeChat Official Account RSS Subscription Assistant</h1>
+<h1>WeRSS — WeChat Official Account RSS Subscription Assistant</h1>
 
-[![Python Version](https://img.shields.io/badge/python-3.13.1+-red.svg)]()
+[![Python](https://img.shields.io/badge/python-3.13.1+-red.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-green.svg)]()
+[![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)]()
 
-[中文](README.zh-CN.md)|[English](ReadMe.md)
+[中文](README.zh-CN.md) | [English](ReadMe.md)
 
-Quick Start
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rachelos/we-mp-rss:latest
-```
-Visit http://<your-ip>:8001/ to get started
-
-# Quick Upgrade 
-
-```
-docker stop we-mp-rss
-docker rm we-mp-rss
-docker pull ghcr.io/rachelos/we-mp-rss:latest
-# If you added other parameters, please modify accordingly
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  ghcr.io/rachelos/we-mp-rss:latest
-```
-
-# Official Image
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  rachelos/we-mp-rss:latest
-```
-# Proxy Mirror for Faster Access (Faster access in China)
-```
-docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  docker.1ms.run/rachelos/we-mp-rss:latest  
-```
-
-# Special Thanks (In no particular order)
-cyChaos, 子健MeLift, 晨阳, 童总, 胜宇, 军亮, 余光, 一路向北, 水煮土豆丝, 人可, 须臾, 澄明, 五梭,Jarvis,三三,哈基米,苹果 
-
-
- <br/>
- <img src="https://github.com/user-attachments/assets/cbe924f2-d8b0-48b0-814e-7c06ccb1911c" height="60" />
-    <img src="https://github.com/user-attachments/assets/6997a236-3df3-49d5-98a4-514f6d1a02c4" height="60" />
-    <br />
-    <br />
-    <a href="https://github.com/RSSNext/Folo/stargazers"><img src="https://img.shields.io/github/stars/RSSNext/Follow?color=ffcb47&labelColor=black&style=flat-square&logo=github&label=Stars" /></a>
-    <a href="https://github.com/RSSNext/Folo/graphs/contributors"><img src="https://img.shields.io/github/contributors/RSSNext/Folo?style=flat-square&logo=github&label=Contributors&labelColor=black" /></a>
-    <a href="https://status.follow.is/" target="_blank"><img src="https://status.follow.is/api/badge/18/uptime?color=%2344CC10&labelColor=black&style=flat-square"/></a>
-    <a href="https://github.com/RSSNext/Folo/releases"><img src="https://img.shields.io/github/downloads/RSSNext/Folo/total?color=369eff&labelColor=black&logo=github&style=flat-square&label=Downloads" /></a>
-    <a href="https://x.com/intent/follow?screen_name=folo_is"><img src="https://img.shields.io/badge/Follow-blue?color=1d9bf0&logo=x&labelColor=black&style=flat-square" /></a>
-    <a href="https://discord.gg/followapp" target="_blank"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2Ffollowapp%3Fwith_counts%3Dtrue&query=approximate_member_count&color=5865F2&label=Discord&labelColor=black&logo=discord&logoColor=white&style=flat-square"/></a>
-    <br />
-A tool for subscribing to and managing WeChat Official Account content, providing RSS subscription functionality.
+A self-hosted tool for subscribing to and managing WeChat Official Account
+content and generating RSS feeds. Since v1.6 the data layer is decoupled from
+the WeChat public platform — no QR-code scanning session is required, and the
+service can be run unattended on a server.
 </div>
 
-> **⚠️ Important Refactoring Notice (since 1.6)**
->
-> The WeChat data fetching layer has been refactored:
-> - **Official account info & article lists** now use the [redfox](https://redfox.hk) data API (`/story/api/gzh/data/accountInfo` and `/queryWorkList`) instead of the original `mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish` endpoints, which were unstable due to frequent risk-control triggers (`base_resp.ret = 200013` / `200003`).
-> - **Article body (正文)** continues to be fetched using the original project's approach — `driver.wxarticle.Web.get_article_content` (Playwright-based scraping) — unchanged.
->
-> Configuration: set `REDFOX_API_KEY` via environment variable or `config.yaml` (`redfox.api_key`). See [Redfox Integration Docs](docs/redfox/INTEGRATION.md) for details.
+---
+
+## Quick Start (Docker)
+
+The image is published to the Aliyun personal registry.
+
+```bash
+docker run -d --name we-mp-rss \
+  -p 8001:8001 \
+  -v ./data:/app/data \
+  --env-file ./.env \
+  crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0
+```
+
+Then visit `http://<your-ip>:8001/`. Default credentials: `admin` / `admin@123`
+— **change them on first login** (top-right user menu → Change Password).
+
+The image does **not** bundle a `REDFOX_API_KEY`. Pass it via `.env`:
+
+```bash
+# .env (one line per key, no quotes)
+REDFOX_API_KEY=ak_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+## Upgrade
+
+```bash
+docker stop we-mp-rss && docker rm we-mp-rss
+docker pull crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0
+# re-run the docker run command above (data/ is on a host volume — preserved)
+```
+
+## v2.0.0 — Redfox Migration (since v1.6)
+
+The WeChat data layer was rewritten to use the stateless
+[redfox.hk](https://redfox.hk) REST API. The old QR-code-scan flow
+(`mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish` + cookie/token
+management) is fully removed.
+
+| Concern | Endpoint | Method |
+| --- | --- | --- |
+| Search an account by keyword | `/story/api/gzh/data/searchUser` | `search_user` |
+| Get an account by ID | `/story/api/gzh/data/accountInfo` | `get_account_info` |
+| Get article list for an account | `/story/api/gzh/data/queryWorkList` | `query_work_list` |
+| Article body (HTML) | `driver.wxarticle.Web.get_article_content` | Playwright scrape (unchanged) |
+
+Configuration:
+
+- `REDFOX_API_KEY` (env) or `redfox.api_key` (config) — required. Get a key at
+  [redfox.hk/settings/api-keys](https://redfox.hk/settings/api-keys).
+- `REDFOX_BASE_URL` (env, default `https://redfox.hk`) — override the host.
+
+Every redfox call is recorded in Redis and viewable under
+**System → Redfox 日志** in the admin UI. Failed calls and their error messages
+are kept for debugging.
+
+See [docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md) for the full
+module map.
 
 ## Features
 
 - WeChat Official Account content scraping and parsing
-- RSS feed generation
-- User-friendly web management interface
-- Scheduled automatic content updates
-- Multiple database support (default SQLite, optional MySQL)
-- Multiple scraping methods support
-- Multiple RSS client support
-- Authorization expiration reminders
-- Custom notification channels
-- Custom RSS title, description, and cover
-- Custom RSS pagination size
-- Export to md/docx/pdf/json formats
-- API interface and WebHook support
-- HTML content filtering rules (global rules and MP-specific rules)
-- Multi-theme support (13 themes: Default Purple, Blue, Green, Orange, Rose, Teal, Pink, Indigo, Violet, Coffee, Navy, Dark Mode, Sepia)
-- Responsive pagination (PC: click navigation, Mobile: load more button)
-- **Cascade System**: Parent-child node architecture with intelligent task distribution for scaling collection capabilities
-- **Environment Exception Statistics**: Automatic tracking and statistics of environment exceptions when accessing WeChat articles
-- **Headers and Cookies Authentication**: Support custom headers and cookies in message tasks for authenticated webhook calls
-- **Configuration Cache**: Support Redis, Memcached, and memory caching for improved configuration read performance
-- **Redfox Data API**: Account info and article lists now use the stateless redfox REST API instead of QR-code scanning sessions
-<p align="center">
-  <a href="https://github.com/DIYgod/sponsors">
-    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
-  </a>
-</p>
-
-
-# ❤️ Sponsorship
-If you find We-MP-RSS helpful, feel free to buy me a beer!<br/>
-<img src="docs/赞赏码.jpg" width=180/>
-[Paypal](https://www.paypal.com/ncp/payment/PUA72WYLAV5KW)
+- RSS feed generation (RSS 2.0 with optional CDATA / full-text / cover)
+- Web admin UI (Vue 3 + Arco Design + Vite)
+- Scheduled auto-update with configurable interval
+- SQLite (default) / MySQL / PostgreSQL backends
+- Configurable scraping model (`app` / `web` / `api`) — `core/wx/model/`
+- Custom RSS title, description, cover, pagination size
+- Custom notification channels (DingTalk / WeChat work-bot / Feishu / Custom Webhook)
+- HTML content filtering rules (global + per-account)
+- Article export: Markdown / DOCX / PDF / JSON
+- 13 UI themes (light / dark / sepia)
+- Responsive pagination (PC click-nav / Mobile load-more)
+- **Cascade System** — parent-child node architecture for distributed collection
+- **Environment Exception Statistics** — automatic per-feed failure tracking
+- **Headers and Cookies Authentication** — for authenticated webhook calls
+- **Configuration Cache** — Redis / Memcached / in-memory
+- **Access Key (AK) auth** — programmatic API access via `Authorization: AK-SK {ak}:{sk}`
+- **Redfox Data API** — stateless account/article fetching, no login session
 
 ## Screenshots
+
 - Login Interface  
-<img src="docs/登录.png" alt="Login" width="80%"/><br/>
+  <img src="docs/登录.png" alt="Login" width="80%"/><br/>
 - Main Interface  
-<img src="docs/主界面.png" alt="Main Interface" width="80%"/><br/>
-- QR Code Authorization  
-<img src="docs/扫码授权.png" alt="QR Code Authorization" width="80%"/><br/>
-- Add Subscription  
-<img src="docs/添加订阅.png" alt="Add Subscription" width="80%"/><br/>
-
-- Client Application<br/>
-<img src="docs/folo.webp" alt="FOLO Client Application" width="80%"/><br/>
-
-
+  <img src="docs/主界面.png" alt="Main Interface" width="80%"/><br/>
+- Add Subscription (now powered by redfox search)  
+  <img src="docs/添加订阅.png" alt="Add Subscription" width="80%"/><br/>
 
 ## System Architecture
 
-The project adopts a front-end and back-end separation architecture:
-- Backend: Python + FastAPI
-- Frontend: Vue 3 + Vite
-- Database: SQLite (default)/MySQL
-<img src="docs/架构原理.png" alt="Architecture Diagram" width="80%"/>
+Front-end / back-end separation, with the backend serving the prebuilt
+frontend as static files:
 
-For more project principles, please refer to the [Project Documentation](https://deepwiki.com/rachelos/we-mp-rss/3.5-notification-system).
+- Backend: Python 3.13 + FastAPI + Uvicorn
+- Frontend: Vue 3 + Vite 8 + rolldown
+- Database: SQLite (default) / MySQL / PostgreSQL
+- Cache: Redis (optional, required for "Redfox 日志" / multi-worker sessions)
+- Task queue: in-process for default, Redis-backed for cascade workers
 
-## HTML Content Filtering Rules
-
-WeRSS supports custom HTML content filtering rules to automatically clean unwanted elements during article content collection, such as ads, recommendation links, etc.
-
-### Features
-
-- **Global Rules**: Apply to all official accounts when no specific account is selected
-- **MP-Specific Rules**: Configure different filtering rules for specific official accounts
-- **Priority Control**: Set rule priority (higher number = executed first)
-- **Multiple Filtering Methods**:
-  - Remove elements by ID
-  - Remove elements by CSS Class
-  - Remove elements by CSS Selector
-  - Filter elements by attribute
-  - Remove content by regular expression
-  - Remove common HTML elements (script, style, comments, etc.)
-
-### Usage
-
-1. Login to the admin interface, go to "Filter Rules" page
-2. Click "Add Filter Rule"
-3. Configure the rule:
-   - **Select Official Account**: Optional, leave empty for global rules
-   - **Rule Name**: A descriptive name for the rule
-   - **Priority**: Higher number means higher priority (0-100)
-   - **Filter Configuration**:
-     - Remove ID elements: One ID per line, e.g., `ad-banner`
-     - Remove Class elements: One class per line, e.g., `ad-container`
-     - CSS Selectors: e.g., `div.ad-wrapper`, `.recommend-list > li`
-     - Attribute filtering: e.g., `data-type="ad"`
-     - Regular expressions: For precise content matching and removal
-
-### API Endpoints
-
-```bash
-# Get filter rules list
-GET /api/filter-rules
-
-# Create filter rule
-POST /api/filter-rules
-{
-  "mp_id": "[]",  // Empty array for global rules
-  "rule_name": "Global Ad Filter",
-  "remove_ids": ["ad-banner"],
-  "remove_classes": ["ad-container"],
-  "priority": 10
-}
-
-# Update filter rule
-PUT /api/filter-rules/{rule_id}
-
-# Delete filter rule
-DELETE /api/filter-rules/{rule_id}
+```
+┌──────────────┐    ┌────────────────────────────────────┐
+│  Vue 3 SPA   │    │  FastAPI (uvicorn, port 8001)      │
+│  (static/)   │◄──►│  ├─ /api/v1/wx  (article/feed/...) │
+└──────────────┘    │  ├─ /api/v1/wx/redfox  (stats/logs)│
+                    │  └─ /story/api/gzh/data/... (redfox)│
+                    └────────────┬───────────────────────┘
+                                 │
+                ┌────────────────┼────────────────┐
+                ▼                ▼                ▼
+           SQLite/MySQL     Redis (logs,    redfox.hk
+                            cache, queue)
 ```
 
-## Installation Guide
+## Installation (Development)
 
-# Development
-## Environment Requirements
-- Python>=3.13.1
-- Node>=20.18.3
-### Backend Service
+### Requirements
 
-1. Clone the project
+- Python ≥ 3.13.1
+- Node ≥ 20.18.3
+
+### Backend
+
 ```bash
-git clone https://github.com/rachelos/we-mp-rss.git
+git clone <your-fork-url> we-mp-rss
 cd we-mp-rss
-```
-
-2. Install Python dependencies
-```bash
 pip install -r requirements.txt
-```
-
-3. Configure database
-Copy and modify the configuration file:
-```bash
 cp config.example.yaml config.yaml
-copy config.example.yaml config.yaml
-```
-3. Start the service
-```bash
+cp .env.example .env       # then fill in REDFOX_API_KEY
 python main.py -job True -init True
 ```
 
-## Frontend Development
-1. Install frontend dependencies
+The `-init` flag creates the SQLite DB and the default `admin` user.
+The `-job` flag enables the scheduler. `main.py` auto-loads `.env` via
+`load_dotenv()` for direct dev runs; in Docker the key is injected via
+`env_file:` (see `compose/*.yaml`).
+
+The backend serves the frontend at `/` from the `static/` directory.
+
+### Frontend
+
 ```bash
-cd we-mp-rss/web_ui
-yarn install
+cd web_ui
+npm install --legacy-peer-deps
+npm run dev          # http://localhost:3000
 ```
 
-2. Start frontend service
+### Production build (static/ sync)
+
+The backend serves the **prebuilt** frontend from `static/`. The Dockerfile
+header reminds: "前端编译非常占用工作流时间 ,可以 编译后复制到static目录再
+提交pull request". The build sequence is therefore:
+
 ```bash
-yarn dev
-```
-3. Access frontend page
-```
-http://localhost:3000
+# 1. Build the SPA
+cd web_ui && npm run build && cd ..
+
+# 2. Sync dist/ → static/ (the directory the backend actually serves)
+rsync -a --delete web_ui/dist/ static/
+
+# 3. Build the Docker image
+docker buildx build --platform=linux/amd64 \
+  -f ./Dockerfile \
+  -t crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:v2.0.0 \
+  .
 ```
 
-# Environment Variable Configuration
+> The image does **not** carry `.env` — `.dockerignore` excludes it. Inject
+> the `REDFOX_API_KEY` at runtime via `env_file:` or `-e`.
 
-The following are the environment variable configurations supported in `config.yaml`:
+## Environment Variables
 
-| Environment Variable | Default Value | Description |
-|----------|--------|------|
+All variables are read by `core/config.py` and can be set in `config.yaml`
+(via the `${VAR:-default}` syntax) or as OS env vars.
+
+| Variable | Default | Description |
+| --- | --- | --- |
 | `APP_NAME` | `we-mp-rss` | Application name |
 | `SERVER_NAME` | `we-mp-rss` | Server name |
 | `WEB_NAME` | `WeRSS微信公众号订阅助手` | Frontend display name |
-| `SEND_CODE` | `True` | Whether to send authorization QR code notifications |
-| `CODE_TITLE` | `WeRSS授权二维码` | QR code notification title |
 | `ENABLE_JOB` | `True` | Whether to enable scheduled tasks |
-| `AUTO_RELOAD` | `False` | Auto-restart service on code changes |
-| `THREADS` | `2` | Maximum number of threads |
-| `DB` | `sqlite:///data/db.db` | Database connection string |
-| `DINGDING_WEBHOOK` | Empty | DingTalk notification webhook URL |
-| `WECHAT_WEBHOOK` | Empty | WeChat notification webhook URL |
-| `FEISHU_WEBHOOK` | Empty | Feishu notification webhook URL |
-| `CUSTOM_WEBHOOK` | Empty | Custom notification webhook URL |
-| `SECRET_KEY` | `we-mp-rss` | Secret key |
-| `USER_AGENT` | `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36/WeRss` | User agent |
-| `SPAN_INTERVAL` | `10` | Scheduled task execution interval (seconds) |
-| `WEBHOOK.CONTENT_FORMAT` | `html` | Article content sending format |
-| `PORT` | `8001` | API service port |
+| `AUTO_RELOAD` | `False` | uvicorn `--reload` for dev |
+| `THREADS` | `2` | uvicorn worker count |
+| `DB` | `sqlite:///data/db.db` | Database URL |
+| `REDFOX_API_KEY` | — | **Required**. redfox.hk API key |
+| `REDFOX_BASE_URL` | `https://redfox.hk` | redfox API base URL |
+| `DINGDING_WEBHOOK` | empty | DingTalk notification webhook |
+| `WECHAT_WEBHOOK` | empty | WeChat work-bot webhook |
+| `FEISHU_WEBHOOK` | empty | Feishu webhook |
+| `CUSTOM_WEBHOOK` | empty | Custom webhook |
+| `SECRET_KEY` | `we-mp-rss` | JWT signing key — **change in production** |
+| `USER_AGENT` | `Mozilla/...` | User-Agent for outbound requests |
+| `SPAN_INTERVAL` | `10` | Scheduler tick interval (seconds) |
+| `WEBHOOK.CONTENT_FORMAT` | `html` | Article body format for webhooks |
+| `PORT` | `8001` | API port |
 | `DEBUG` | `False` | Debug mode |
-| `MAX_PAGE` | `5` | Maximum scraping pages |
-| `RSS_BASE_URL` | Empty | RSS domain address |
-| `RSS_LOCAL` | `False` | Whether to use local RSS links |
-| `RSS_TITLE` | Empty | RSS title |
-| `RSS_DESCRIPTION` | Empty | RSS description |
-| `RSS_COVER` | Empty | RSS cover |
-| `RSS_FULL_CONTEXT` | `True` | Whether to display full text |
-| `RSS_ADD_COVER` | `True` | Whether to add cover images |
-| `RSS_CDATA` | `False` | Whether to enable CDATA |
-| `RSS_PAGE_SIZE` | `30` | RSS pagination size |
-| `TOKEN_EXPIRE_MINUTES` | `4320` | Login session validity duration (minutes) |
+| `MAX_PAGE` | `5` | Max pages per scraping run |
+| `RSS_BASE_URL` | empty | Public RSS domain |
+| `RSS_LOCAL` | `False` | Use local RSS links instead of `RSS_BASE_URL` |
+| `RSS_TITLE` | empty | Override feed title |
+| `RSS_DESCRIPTION` | empty | Override feed description |
+| `RSS_COVER` | empty | Override feed cover image |
+| `RSS_FULL_CONTEXT` | `True` | Include full article body in feed |
+| `RSS_ADD_COVER` | `True` | Include cover image in feed items |
+| `RSS_CDATA` | `False` | Wrap content in `<![CDATA[]]>` |
+| `RSS_PAGE_SIZE` | `30` | Feed item count per page |
+| `TOKEN_EXPIRE_MINUTES` | `4320` | Login session validity (minutes) |
 | `CACHE.DIR` | `./data/cache` | Cache directory |
-| `ARTICLE.TRUE_DELETE` | `False` | Whether to truly delete articles |
-| `GATHER.CONTENT` | `True` | Whether to collect content |
-| `GATHER.MODEL` | `app` | Collection mode |
-| `GATHER.CONTENT_AUTO_CHECK` | `False` | Whether to automatically check uncollected article content |
-| `GATHER.CONTENT_AUTO_INTERVAL` | `59` | Time interval for automatically checking uncollected article content (minutes) |
+| `ARTICLE.TRUE_DELETE` | `False` | Hard-delete vs. soft-delete articles |
+| `GATHER.CONTENT` | `True` | Fetch full article body |
+| `GATHER.MODEL` | `app` | Collection model (`app` / `web` / `api`) |
+| `GATHER.CONTENT_AUTO_CHECK` | `False` | Periodically backfill missing bodies |
+| `GATHER.CONTENT_AUTO_INTERVAL` | `59` | Backfill interval (minutes) |
 | `GATHER.CONTENT_MODE` | `web` | Content correction mode |
-| `SAFE_HIDE_CONFIG` | `db,secret,token,notice.wechat,notice.feishu,notice.dingding` | Configuration information to hide |
-| `SAFE_LIC_KEY` | `RACHELOS` | Authorization encryption key |
-| `LOG_FILE` | Empty | Log file path |
+| `SAFE_HIDE_CONFIG` | `db,secret,token,notice.wechat,notice.feishu,notice.dingding` | Keys hidden in the System Info page |
+| `LOG_FILE` | empty | Log file path (stdout if empty) |
 | `LOG_LEVEL` | `INFO` | Log level |
-| `EXPORT_PDF` | `False` | Whether to enable PDF export functionality |
+| `EXPORT_PDF` | `False` | Enable PDF export |
+| `EXPORT_PDF_DIR` | `./data/pdf` | PDF output directory |
+| `EXPORT_MARKDOWN` | `False` | Enable markdown export |
+| `EXPORT_MARKDOWN_DIR` | `./data/markdown` | Markdown output directory |
 
+## Access Key Authentication
 
+For programmatic API access without exposing the admin password.
 
+### Create an AK
 
+1. Login → **Access Key Management** in the left menu
+2. Click **Create Access Key**
+3. Fill in name, description, permissions, expiry
+4. Save both the Access Key and the Secret (the Secret is shown **only once**)
+
+### Use the AK
+
+```bash
+curl -H "Authorization: AK-SK {access_key}:{secret_key}" \
+     http://localhost:8001/api/feeds
+```
+
+```python
+import requests
+r = requests.get(
+    "http://localhost:8001/api/feeds",
+    headers={"Authorization": f"AK-SK {access_key}:{secret_key}"},
+)
+print(r.json())
+```
+
+Full guide: [docs/AK_Authentication_Guide.md](docs/AK_Authentication_Guide.md).
+
+## HTML Content Filtering Rules
+
+Filter unwanted elements (ads, recommendation blocks) from scraped article
+bodies at the global or per-account level.
+
+- **Scope** — Global (when no `mp_id` is set) or per-account
+- **Priority** — 0-100; higher runs first
+- **Methods**:
+  - Remove by HTML `id`
+  - Remove by CSS `class`
+  - Remove by CSS selector
+  - Remove by attribute (e.g. `data-type="ad"`)
+  - Remove by regex
+  - Strip common elements (`<script>`, `<style>`, comments)
+
+```bash
+# List
+GET    /api/filter-rules
+
+# Create
+POST   /api/filter-rules
+{
+  "mp_id": "[]",                  # "[]" for global
+  "rule_name": "Global Ad Filter",
+  "priority": 10,
+  "remove_ids": ["ad-banner"],
+  "remove_classes": ["ad-container"]
+}
+
+# Update / Delete
+PUT    /api/filter-rules/{id}
+DELETE /api/filter-rules/{id}
+```
+
+## FAQ
+
+**Default credentials?** `admin` / `admin@123` — change on first login.
+
+**`/mps/search` returns empty?** The redfox.hk public library only indexes
+"hot" accounts. For unindexed accounts, paste the `fakeid` (Base64 `bizInfo`)
+or `wxId` directly when adding a subscription.
+
+**Where do I get a `REDFOX_API_KEY`?** Register at
+[redfox.hk](https://redfox.hk?source=redfox_api_md) and create one in
+[API Keys](https://redfox.hk/settings/api-keys?source=redfox_api_md).
+
+**Why doesn't the admin UI show my changes after pulling a new image?**
+The backend serves the prebuilt frontend from `static/`. If you only pulled
+a new image but did not rebuild + sync `web_ui/dist/ → static/`, the UI will
+be stale. Re-run the build sequence in **Production build** above.
+
+**The /mps/search logs are empty even when search returns nothing?** A
+`REDFOX_API_KEY 未配置` error is raised in `_headers()` *before* `_post()`, so
+the call is not recorded. Check the uvicorn stdout log or the **System Info**
+page for the redfox status block.
+
+**How do I change the database?** Set the `DB` env var or edit `db:` in
+`config.yaml`:
+
+```ini
+# SQLite
+DB=sqlite:///data/db.db
+# MySQL
+DB=mysql+pymysql://<user>:<password>@<host>/<db>?charset=utf8mb4
+# PostgreSQL
+DB=postgresql://<user>:<password>@<host>/<db>
+```
+
+## License
+
+MIT
