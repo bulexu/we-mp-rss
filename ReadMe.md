@@ -50,11 +50,14 @@ cyChaos, 子健MeLift, 晨阳, 童总, 胜宇, 军亮, 余光, 一路向北, 水
     <br />
 A tool for subscribing to and managing WeChat Official Account content, providing RSS subscription functionality.
 </div>
-<p align="center">
-  <a href="https://github.com/DIYgod/sponsors">
-    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
-  </a>
-</p>
+
+> **⚠️ Important Refactoring Notice (since 1.6)**
+>
+> The WeChat data fetching layer has been refactored:
+> - **Official account info & article lists** now use the [redfox](https://redfox.hk) data API (`/story/api/gzh/data/accountInfo` and `/queryWorkList`) instead of the original `mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish` endpoints, which were unstable due to frequent risk-control triggers (`base_resp.ret = 200013` / `200003`).
+> - **Article body (正文)** continues to be fetched using the original project's approach — `driver.wxarticle.Web.get_article_content` (Playwright-based scraping) — unchanged.
+>
+> Configuration: set `REDFOX_API_KEY` via environment variable or `config.yaml` (`redfox.api_key`). See [Redfox Integration Docs](docs/redfox/INTEGRATION.md) for details.
 
 ## Features
 
@@ -78,6 +81,12 @@ A tool for subscribing to and managing WeChat Official Account content, providin
 - **Environment Exception Statistics**: Automatic tracking and statistics of environment exceptions when accessing WeChat articles
 - **Headers and Cookies Authentication**: Support custom headers and cookies in message tasks for authenticated webhook calls
 - **Configuration Cache**: Support Redis, Memcached, and memory caching for improved configuration read performance
+- **Redfox Data API**: Account info and article lists now use the stateless redfox REST API instead of QR-code scanning sessions
+<p align="center">
+  <a href="https://github.com/DIYgod/sponsors">
+    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
+  </a>
+</p>
 
 
 # ❤️ Sponsorship

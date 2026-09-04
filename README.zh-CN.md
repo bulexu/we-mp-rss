@@ -53,11 +53,14 @@ docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  docker.1ms.ru
     <br />
 一个用于订阅和管理微信公众号内容的工具，提供RSS订阅功能。
 </div>
-<p align="center">
-  <a href="https://github.com/DIYgod/sponsors">
-    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
-  </a>
-</p>
+
+> **⚠️ 重要重构说明（自 1.6 起）**
+>
+> 已重构微信公众号数据获取层：
+> - **公众号信息与文章列表**改用 [redfox](https://redfox.hk) 数据接口（`/story/api/gzh/data/accountInfo` 与 `/queryWorkList`），替换原 `mp.weixin.qq.com/cgi-bin/searchbiz` + `appmsgpublish` 接口。原链路因长期扫码会话频繁触发风控（`base_resp.ret = 200013` / `200003`），稳定性较差。
+> - **文章正文（获取正文）** 仍沿用原项目方式 —— `driver.wxarticle.Web.get_article_content`（基于 Playwright 抓取），未做改动。
+>
+> 配置方式：通过环境变量 `REDFOX_API_KEY` 或 `config.yaml`（`redfox.api_key`）注入 API Key。详细文档：[docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md)。
 
 ## 功能特性
 
@@ -81,6 +84,12 @@ docker run -d  --name we-mp-rss  -p 8001:8001 -v ./data:/app/data  docker.1ms.ru
 - **环境异常统计**：自动统计微信公众号文章获取时的环境异常情况
 - **Headers和Cookies认证**：消息任务支持自定义Headers和Cookies，用于需要认证的WebHook调用
 - **配置缓存**：支持Redis、Memcached和内存缓存，提升配置读取性能
+- **Redfox 数据接口**：公众号信息与文章列表改用无状态的 redfox REST 接口，不再依赖扫码会话
+<p align="center">
+  <a href="https://github.com/DIYgod/sponsors">
+    <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />
+  </a>
+</p>
 
 
 # ❤️ 赞助
