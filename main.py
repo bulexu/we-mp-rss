@@ -5,6 +5,20 @@ import asyncio
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# 本地 `python main.py` 启动时，Docker 不会跑，所以需要手动加载项目根目录的
+# `.env`，让 `config.yaml` 里的 `${REDFOX_API_KEY:-...}` 等占位符可以解析到值。
+# 与 `compose/*.yaml` 中 `env_file: ../.env` 行为保持一致；生产环境以 compose 为准，
+# 本段代码在容器内会因 `.env` 不存在而静默跳过（override=False 默认值）。
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)
+except Exception:
+    # dotenv 不可用或 .env 缺失时不影响主流程（生产已通过 env_file 注入）
+    pass
+
 from core.config import cfg
 if cfg.get("redis.server.enabled", False):
         from tools.redis_server import run_redis_server
@@ -18,6 +32,10 @@ if __name__ == '__main__':
     print("环境变量:")
     for k,v in os.environ.items():
         print(f"{k}={v}")
+    # 根据 LOG_LEVEL 环境变量控制 uvicorn 日志级别
+    _level_name = (os.getenv("LOG_LEVEL") or cfg.get("log.level", "INFO")).upper()
+    _uvicorn_level = _level_name.lower() if _level_name in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"} else "info"
+
     if cfg.args.init=="True":
         import init_sys as init
         init.init()
@@ -102,6 +120,7 @@ if __name__ == '__main__':
             reload_dirs=reload_dirs,
             reload_excludes=['static', 'data', 'node_modules', '*.pnpm*'],
             workers=thread,
+            log_level=_uvicorn_level,
         )
         server = uvicorn.Server(config)
         
@@ -118,5 +137,6 @@ if __name__ == '__main__':
                 reload_dirs=reload_dirs,
                 reload_excludes=['static','data','node_modules','*.pnpm*'],
                 workers=thread,
+                log_level=_uvicorn_level,
                 )
     pass

@@ -8,6 +8,11 @@ __pycache__
 *.log
 .venv
 env
+# 密钥/凭据：绝不允许烤进镜像（AGENTS.md）。运行时应通过 compose env_file 或
+# docker run -e 注入；.env.example 是模板，仍保留以便容器内提示配置项。
+.env
+.env.*
+!.env.example
 data
 data1
 dist

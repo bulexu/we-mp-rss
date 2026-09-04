@@ -7,8 +7,10 @@
 
 使用示例::
 
-    from core.redfox import get_account_info, query_work_list
+    from core.redfox import get_account_info, search_user, query_work_list
     info = get_account_info(account="duhaoshu")
+    # 关键词搜索（公众号发现场景）：每页 20 条
+    results = search_user(keyword="十点读书", offset=0)
     works = query_work_list(bizInfo="MjM5MDMyMzg2MA==", offset=0)
 """
 
@@ -17,6 +19,7 @@ from .client import (
     RedfoxError,
     get_account_info,
     query_work_list,
+    search_user,
 )
 
 __all__ = [
@@ -24,4 +27,5 @@ __all__ = [
     "RedfoxError",
     "get_account_info",
     "query_work_list",
+    "search_user",
 ]

@@ -5,7 +5,7 @@
 ``driver.wxarticle``。
 
 * ``WxGather``: 采集基类，封装 ``get_Articles`` 与 ``FillBack`` 行为。
-* ``search_Biz``: 基于 redfox 的公众号账号信息查询。
+* ``search_Biz``: 基于 redfox ``/searchUser`` 关键词搜索的公众号发现接口。
 """
 
 from .base import WxGather
@@ -16,15 +16,15 @@ ga = WxGather()
 
 
 def search_Biz(kw: str = "", limit: int = 5, offset: int = 0):
-    """公众号账号信息查询的便捷封装。
+    """公众号账号搜索的便捷封装。
 
     Args:
-        kw: 公众号名称或微信号。
-        limit: 返回条数上限（redfox 单次最多返回 1 条）。
-        offset: 兼容旧接口语义，redfox 接口暂不支持 offset。
+        kw: 搜索关键词（公众号名 / 描述 / 微信号）。
+        limit: 返回条数上限（最多 100 条）。
+        offset: 分页偏移量，每页 20 条。
 
     Returns:
-        与旧 ``searchbiz`` 兼容的字典结构。
+        与旧 ``searchbiz`` 兼容的字典结构，包含 ``list`` / ``total`` / ``base_resp``。
     """
     return ga.search_Biz(kw, limit, offset)
 

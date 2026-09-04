@@ -23,6 +23,7 @@
               allow-clear
               allow-search
               @search="handleSearch"
+              @keydown.enter.prevent="handleSearchEnter"
             >
             <a-option v-for="item of searchResults" :value="item.nickname" :label="item.nickname" @click="handleSelect(item)" />
           </a-select>
@@ -59,7 +60,7 @@
         
         <a-form-item>
           <a-space>
-            <a-button type="primary" html-type="submit" :loading="loading">
+            <a-button type="primary" @click="handleSubmit" :loading="loading">
               添加订阅
             </a-button>
             <a-button @click="resetForm">重置</a-button>
@@ -135,6 +136,16 @@ const handleSearch = async (value: string) => {
     // Message.error('搜索公众号失败')
     searchResults.value = []
   }
+}
+
+// 在搜索框里按回车：阻止表单提交，主动触发一次搜索
+const handleSearchEnter = async () => {
+  const kw = (form.value.name || '').trim()
+  if (!kw) {
+    searchResults.value = []
+    return
+  }
+  await handleSearch(kw)
 }
 
 const handleSelect = (item: any) => {

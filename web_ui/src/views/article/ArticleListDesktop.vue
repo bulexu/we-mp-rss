@@ -132,10 +132,6 @@
                   </a-doption>
                 </template>
               </a-dropdown>
-              <a-button @click="handleAuthClick">
-                <template #icon><icon-scan /></template>
-                刷新授权
-              </a-button>
               <a-dropdown>
                 <a-button>
                   <template #icon>
@@ -354,7 +350,6 @@ import { getArticles, deleteArticle as deleteArticleApi, ClearArticle, ClearDupl
 import { ExportOPML, ExportMPS, ImportMPS } from '@/api/export'
 import ExportModal from '@/components/ExportModal.vue'
 import { addFeaturedArticle, getFeaturedArticleTaskStatus, getSubscriptions, UpdateMps, toggleMpStatus as toggleMpStatusApi } from '@/api/subscription'
-import { inject } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { formatDateTime, formatTimestamp } from '@/utils/date'
 import router from '@/router'
@@ -877,12 +872,6 @@ const handleSearch = () => {
 const handleArticleFilterChange = () => {
   pagination.value.current = 1
   fetchArticles()
-}
-
-const wechatAuthQrcodeRef = ref()
-const showAuthQrcode = inject('showAuthQrcode') as () => void
-const handleAuthClick = () => {
-  showAuthQrcode()
 }
 
 const exportOPML = async () => {

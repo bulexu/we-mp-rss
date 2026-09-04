@@ -45,7 +45,10 @@ class RedfoxClient:
     DEFAULT_BASE_URL = "https://redfox.hk"
     ACCOUNT_INFO_PATH = "/story/api/gzh/data/accountInfo"
     WORK_LIST_PATH = "/story/api/gzh/data/queryWorkList"
+    SEARCH_USER_PATH = "/story/api/gzh/data/searchUser"
     SUCCESS_CODE = 2000
+    # searchUser / queryWorkList 单页固定 20 条
+    PAGE_SIZE = 20
 
     def __init__(
         self,
@@ -181,7 +184,7 @@ class RedfoxClient:
         """从请求体中尽量提取一个公众号标识，用于统计维度。"""
         if not isinstance(payload, dict):
             return ""
-        for key in ("bizInfo", "wxId", "account"):
+        for key in ("bizInfo", "wxId", "account", "keyword"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -201,7 +204,7 @@ class RedfoxClient:
         """写入调用日志。失败不影响主流程。"""
         try:
             request_summary: Dict[str, Any] = {}
-            for key in ("account", "wxId", "bizInfo", "offset", "sortType"):
+            for key in ("account", "wxId", "bizInfo", "keyword", "offset", "sortType"):
                 if key in payload and payload[key] is not None:
                     val = payload[key]
                     if isinstance(val, str) and len(val) > 200:
@@ -267,6 +270,52 @@ class RedfoxClient:
         """
         payload = self._ensure_payload(account=account, wxId=wxId, bizInfo=bizInfo)
         resp = self._post(self.ACCOUNT_INFO_PATH, payload)
+        return self._unwrap(resp)
+
+    def search_user(
+        self,
+        keyword: str = "",
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """按关键词模糊搜索公众号账号（广域库）。
+
+        与 ``get_account_info`` 的「精确查找单个公众号」不同：本接口返回与
+        关键词相关的多条结果，适合订阅前的账号发现场景。
+
+        Args:
+            keyword: 搜索关键词，必填。匹配公众号名 / 描述 / 微信号等。
+            offset: 分页偏移量，从 0 开始，单页固定 20 条。
+
+        Returns:
+            解包后的 ``data`` 字段，形如::
+
+                {
+                    "list": [
+                        {
+                            "account": "duhaoshu",
+                            "accountName": "十点读书",
+                            "avatarUrl": "...",
+                            "bizInfo": "MjM5MDMyMzg2MA==",
+                            "description": "...",
+                            "qrcodeUrl": "...",
+                            "verifyInfo": "...",
+                            "wxId": "gh_5c7e8b7f586b",
+                            "updateTime": "...",
+                        },
+                        ...
+                    ],
+                    "total": 941407,
+                }
+        """
+        kw = (keyword or "").strip()
+        if not kw:
+            raise RedfoxError("searchUser: keyword 不能为空")
+        try:
+            offset = max(0, int(offset))
+        except (TypeError, ValueError):
+            offset = 0
+        payload = {"keyword": kw, "offset": offset}
+        resp = self._post(self.SEARCH_USER_PATH, payload)
         return self._unwrap(resp)
 
     def query_work_list(
@@ -347,6 +396,11 @@ def get_account_info(
     return _get_default_client().get_account_info(
         account=account, wxId=wxId, bizInfo=bizInfo
     )
+
+
+def search_user(keyword: str = "", offset: int = 0) -> Dict[str, Any]:
+    """``RedfoxClient.search_user`` 的便捷封装。"""
+    return _get_default_client().search_user(keyword=keyword, offset=offset)
 
 
 def query_work_list(

@@ -3,7 +3,7 @@ import requests
 import json
 import re
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 from core.models import Feed
 from core.db import DB
 from core.models.base import DATA_STATUS
@@ -13,6 +13,7 @@ from core.print import print_error,print_info, print_warning, print_success
 from core.rss import RSS
 from driver.wxarticle import Web
 from core.wait import Wait
+from core.redfox.client import RedfoxClient
 import random
 
 
@@ -275,15 +276,17 @@ class WxGather:
 
     #通过 redfox 数据接口查询公众号
     # 自 1.6 起，不再依赖微信公众平台的 searchbiz 接口；
-    # 改为通过 redfox.hk 的 /story/api/gzh/data/accountInfo 查询账号信息，
-    # 通过 /story/api/gzh/data/queryWorkList 拉取作品列表。
+    # 改为通过 redfox.hk 的 /story/api/gzh/data/searchUser 按关键词搜索账号
+    # （广域库，单页 20 条），通过 /story/api/gzh/data/queryWorkList 拉取
+    # 作品列表。
     def search_Biz(self, kw: str = "", limit: int = 10, offset: int = 0):
-        """搜索公众号账号信息。
+        """搜索公众号账号信息（关键词模糊匹配）。
 
         Args:
-            kw: 公众号名称或微信号。
-            limit: 返回条数上限（兼容旧接口语义，redfox 单次只能返回 1 条）。
-            offset: 兼容旧接口语义，redfox 接口暂不提供 offset 入参。
+            kw: 搜索关键词，匹配公众号名 / 描述 / 微信号等。
+            limit: 返回条数上限，超出 redfox 单页（20 条）时按需自动翻页
+                （最多 5 页 = 100 条），避免单次请求过重。
+            offset: 分页偏移量，每页 +20。
 
         Returns:
             与旧 searchbiz 兼容的字典::
@@ -299,9 +302,12 @@ class WxGather:
                             "wxId": ...,
                             "qrcodeUrl": ...,
                             "verifyInfo": ...,
-                        }
+                            # searchUser 额外字段
+                            "updateTime": ...,
+                        },
+                        ...
                     ],
-                    "total": int,
+                    "total": int,                # redfox 报告的全网命中数
                     "base_resp": {"ret": int, "err_msg": str},
                 }
 
@@ -316,46 +322,54 @@ class WxGather:
                 "base_resp": {"ret": 0, "err_msg": ""},
             }
 
-        from core.redfox import RedfoxError, get_account_info
-
-        base_resp = {"ret": 0, "err_msg": ""}
-        item: Dict[str, Any] = {}
-        try:
-            # 优先级：account（微信号）> wxId（gh_ 前缀）> bizInfo
-            data = get_account_info(account=kw)
-            item = _map_account_info(data)
-            items = [item]
-        except RedfoxError as e:
-            msg = str(e)
-            # 关键词为账号 ID 时退回 wxId 字段再试一次。
-            if kw.startswith("gh_"):
-                try:
-                    data = get_account_info(wxId=kw)
-                    item = _map_account_info(data)
-                    items = [item]
-                except RedfoxError as e2:
-                    base_resp = {"ret": -1, "err_msg": str(e2)}
-                    items = []
-            else:
-                base_resp = {"ret": -1, "err_msg": msg}
-                items = []
-        except Exception as e:  # noqa: BLE001
-            print_error(f"redfox 账号查询异常: {e}")
-            base_resp = {"ret": -1, "err_msg": str(e)}
-            items = []
-
-        # limit/offset 兼容旧语义；redfox 单次只返回 1 条，这里截断兜底。
         try:
             limit = int(limit) if limit else 10
         except (TypeError, ValueError):
             limit = 10
-        if offset:
-            items = items[int(offset):] if int(offset) < len(items) else []
-        items = items[: max(1, limit)]
+        try:
+            offset = int(offset) if offset else 0
+        except (TypeError, ValueError):
+            offset = 0
+        if limit <= 0:
+            limit = 10
+        if offset < 0:
+            offset = 0
+
+        from core.redfox import RedfoxError, search_user
+
+        base_resp = {"ret": 0, "err_msg": ""}
+        items: List[Dict[str, Any]] = []
+        total: int = 0
+        page_size = RedfoxClient.PAGE_SIZE
+        # 单次最多拉 5 页（= 100 条），防止外部传超大 limit 时把 redfox 打爆。
+        max_pages = min(5, max(1, (limit + page_size - 1) // page_size))
+        try:
+            for page in range(max_pages):
+                page_offset = offset + page * page_size
+                data = search_user(keyword=kw, offset=page_offset)
+                if page == 0:
+                    total = int(data.get("total", 0) or 0)
+                page_list = data.get("list") or []
+                if not isinstance(page_list, list):
+                    page_list = []
+                for raw in page_list:
+                    if not isinstance(raw, dict):
+                        continue
+                    items.append(_map_account_info(raw))
+                    if len(items) >= limit:
+                        break
+                # 当前页不足一整页说明已经到尾，没有下一页了。
+                if len(page_list) < page_size or len(items) >= limit:
+                    break
+        except RedfoxError as e:
+            base_resp = {"ret": -1, "err_msg": str(e)}
+        except Exception as e:  # noqa: BLE001
+            print_error(f"redfox 账号搜索异常: {e}")
+            base_resp = {"ret": -1, "err_msg": str(e)}
 
         return {
             "list": items,
-            "total": len(items),
+            "total": total,
             "base_resp": base_resp,
         }
 

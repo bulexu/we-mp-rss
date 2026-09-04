@@ -113,18 +113,22 @@ Content-Type: application/json
 * `core/wx/base.py` — `WxGather.search_Biz` 已切换到 redfox
 * `core/wx/model/web.py` — `MpsWeb.get_Articles` 已切换到 redfox
 * `core/wx/model/app.py`、`core/wx/model/api.py` — 历史兼容 shim
-* `apis/auth.py` — `/qr/*` 路由返回 `410 Gone`
+* `apis/redfox.py` — `/api/v1/wx/redfox/{logs,stats,logs/clear}` 新接口
 
-## 已弃用的旧入口
+## 已下线的旧入口
 
-| 入口                                          | 状态                                          |
-| --------------------------------------------- | --------------------------------------------- |
-| `apis/auth.py::/qr/code`、`/qr/image` 等     | 返回 `410 Gone`，提示改用 redfox              |
-| `driver/wx_api.py`、`driver/wx.py`            | 仅打印 warning，不再触发扫码流程              |
-| `core/wx/wx.py::search_Biz` / `get_Articles` | 已重定向到 `core.redfox` / `core.wx`          |
-| `jobs/failauth.py::send_wx_code`              | no-op，仅打印 warning                         |
+> 已彻底删除，不再保留任何 shim 或 410 占位接口。
 
-如需彻底下线旧实现，可直接删除以上模块；当前保留仅为平滑迁移。
+| 原入口                                          | 替代实现                          |
+| ----------------------------------------------- | --------------------------------- |
+| `apis/auth.py::/qr/code`、`/qr/image` 等       | 由 redfox 客户端直接抓取          |
+| `driver/wx_api.py`、`driver/wx.py`              | `core.redfox.client.RedfoxClient` |
+| `driver/token.py`、`driver/base.py`            | 同上                              |
+| `driver/success.py`、`driver/auth.py`          | 同上                              |
+| `core/wx/wx.py::search_Biz` / `get_Articles`   | `core.redfox` / `core.wx`         |
+| `core/wx/cfg.py::wx_cfg`                        | `core.config.cfg`                 |
+| `jobs/failauth.py::send_wx_code`                | 无需重试，redfox 由调用方按需重试 |
+| `views/WechatStatus.vue`、`WechatAuthQrcode.vue` | 已无对应页面                     |
 
 ## 常见问题
 
