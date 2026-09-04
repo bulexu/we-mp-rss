@@ -29,6 +29,7 @@ from apis.tools import router as tools_router
 from apis.github_update import router as github_router
 from apis.cascade import router as cascade_router
 from apis.env_exception import router as env_exception_router
+from apis.redfox import router as redfox_router
 from apis.filter_rule import router as filter_rule_router
 from apis.task_queue import router as task_queue_router
 from apis.proxy import router as proxy_router
@@ -104,6 +105,7 @@ api_router.include_router(tools_router)
 api_router.include_router(github_router)
 api_router.include_router(cascade_router)
 api_router.include_router(env_exception_router)
+api_router.include_router(redfox_router)
 api_router.include_router(filter_rule_router)
 api_router.include_router(task_queue_router)
 api_router.include_router(proxy_router)

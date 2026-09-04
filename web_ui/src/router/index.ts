@@ -180,9 +180,18 @@ const routes = [
         path: 'env-exception',
         name: 'EnvExceptionStats',
         component: () => import('@/views/EnvExceptionStats.vue'),
-        meta: { 
+        meta: {
           requiresAuth: true,
-          permissions: ['admin'] 
+          permissions: ['admin']
+        }
+      },
+      {
+        path: 'redfox/logs',
+        name: 'RedfoxLogs',
+        component: () => import('@/views/RedfoxLogs.vue'),
+        meta: {
+          requiresAuth: true,
+          permissions: ['admin']
         }
       },
       {
@@ -220,15 +229,6 @@ const routes = [
         meta: { 
           requiresAuth: true,
           permissions: ['admin'] 
-        }
-      },
-      {
-        path: 'wechat-status',
-        name: 'WechatStatus',
-        component: () => import('@/views/WechatStatus.vue'),
-        meta: { 
-          requiresAuth: true,
-          permissions: ['wechat:manage'] 
         }
       },
       {

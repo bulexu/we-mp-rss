@@ -8,22 +8,6 @@
     />
     
     <a-card>
-      <a-space direction="vertical" size="large">
-        <a-space>
-          <a-link @click="openDialog()">通过公众号码文章获取</a-link>
-        </a-space>
-      </a-space>
-
- <div v-if="modalVisible">
-    <a-input
-      v-model="articleLink"
-      placeholder="请输入一个公众号文章链接地址"
-      style="width: 300px; margin-bottom: 10px;"
-    />
-    <a-button @click="handleGetMpInfo" :loading="isFetching">获取</a-button>
-  </div>
-
-
       <a-form
         ref="formRef"
         :model="form"
@@ -90,11 +74,10 @@
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
-import { addSubscription,AddSubscriptionParams, searchBiz,getSubscriptionInfo } from '@/api/subscription'
+import { addSubscription,AddSubscriptionParams, searchBiz } from '@/api/subscription'
 import {Avatar} from '@/utils/constants'
 const router = useRouter()
 const loading = ref(false)
-const isFetching = ref(false)
 const searchResults = ref([])
 const avatar_url = ref('/static/default-avatar.png')
 const formRef = ref(null)
@@ -154,34 +137,6 @@ const handleSearch = async (value: string) => {
   }
 }
 
-const handleGetMpInfo = async () => {
-  if (isFetching.value) return false;
-  if (!articleLink.value) {
-    Message.error('请提供一个公众号文章链接');
-    return false;
-  }
-  isFetching.value = true;
-  try {
-    const res = await getSubscriptionInfo(articleLink.value.trim()); // 确保去除空格
-    console.log('获取公众号信息:', res);
-    const info=res?.mp_info||false
-    if (info) {
-      form.value.name = info.mp_name || '';
-      form.value.description = info.mp_name || '';
-      form.value.wx_id = info.biz || '';
-      form.value.avatar = info.logo || '';
-    }
-  } catch (error) {
-    console.error('获取公众号信息失败:', error);
-    Message.error('获取公众号信息失败');
-    return false;
-  } finally {
-    isFetching.value = false;
-  }
-  modalVisible.value = false;
-  return true;
-}
-
 const handleSelect = (item: any) => {
   console.log(item)
   form.value.name = item.nickname
@@ -232,14 +187,6 @@ const resetForm = () => {
   }
   searchResults.value = []
 }
-
-const modalVisible = ref(false);
-const articleLink = ref('');
-
-const openDialog = () => {
-  modalVisible.value = true;
-};
-
 
 const goBack = () => {
   router.go(-1)

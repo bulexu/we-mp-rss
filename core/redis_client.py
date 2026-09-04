@@ -267,22 +267,210 @@ class RedisClient:
             print_error(f"清除环境异常记录失败: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # Redfox 数据接口调用日志
+    # ------------------------------------------------------------------
+    _REDFOX_LOG_RETENTION = 2000  # 最近日志条数
+    _REDFOX_LOG_TTL = 86400 * 7  # 日志保留 7 天
+
+    def record_redfox_call(
+        self,
+        endpoint: str,
+        code: int,
+        success: bool,
+        latency_ms: int,
+        mp_id: str = "",
+        request: Optional[Dict[str, Any]] = None,
+        error_msg: str = "",
+        http_status: int = 0,
+    ) -> bool:
+        """记录一次 redfox 数据接口调用。
+
+        Args:
+            endpoint: 接口路径，例如 ``/story/api/gzh/data/accountInfo``。
+            code: redfox 业务状态码（2000 表示成功）。
+            success: 是否成功（依据 redfox code 与网络状态综合判断）。
+            latency_ms: 请求耗时，毫秒。
+            mp_id: 触发本次调用的公众号 ID（若可获取）。
+            request: 请求体（自动剔除 ``account/wxId/bizInfo`` 之外的字段，
+                仅保留关键字以避免存储过大的 payload）。
+            error_msg: 错误信息（成功调用为空）。
+            http_status: HTTP 状态码（0 表示未发出请求）。
+
+        Returns:
+            是否记录成功。
+        """
+        if not self.is_connected:
+            if not self.reconnect():
+                return False
+
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            pipe = self._client.pipeline()
+
+            # 1. 当日总调用次数
+            pipe.incr(f"werss:redfox:total:{today}")
+            pipe.expire(
+                f"werss:redfox:total:{today}", 86400 * 30
+            )  # 保留 30 天
+
+            # 2. 成功 / 失败 分桶
+            status_key = "success" if success else "failed"
+            pipe.incr(f"werss:redfox:{status_key}:{today}")
+            pipe.expire(f"werss:redfox:{status_key}:{today}", 86400 * 30)
+
+            # 3. 按 endpoint 维度计数
+            endpoint_key = f"werss:redfox:endpoint:{today}"
+            pipe.hincrby(endpoint_key, endpoint, 1)
+            pipe.expire(endpoint_key, 86400 * 30)
+
+            # 4. 触发调用的公众号维度统计
+            if mp_id:
+                mp_key = f"werss:redfox:mp:{today}"
+                pipe.hincrby(mp_key, mp_id, 1)
+                pipe.expire(mp_key, 86400 * 30)
+
+            # 5. 详细日志列表（最近 N 条）
+            log_entry = {
+                "endpoint": endpoint,
+                "code": int(code or 0),
+                "success": bool(success),
+                "latency_ms": int(latency_ms or 0),
+                "mp_id": (mp_id or "")[:128],
+                "request": request or {},
+                "error_msg": (error_msg or "")[:300],
+                "http_status": int(http_status or 0),
+                "timestamp": timestamp,
+            }
+            log_key = "werss:redfox:logs"
+            pipe.lpush(log_key, json.dumps(log_entry, ensure_ascii=False))
+            pipe.ltrim(log_key, 0, self._REDFOX_LOG_RETENTION - 1)
+            pipe.expire(log_key, self._REDFOX_LOG_TTL)
+
+            pipe.execute()
+            return True
+        except redis.exceptions.ConnectionError as e:
+            print_error(f"Redis连接断开，记录 redfox 调用失败: {e}")
+            self._client = None
+            return False
+        except Exception as e:
+            print_error(f"记录 redfox 调用日志失败: {e}")
+            return False
+
+    def get_redfox_stats(self, date: Optional[str] = None) -> Dict[str, Any]:
+        """获取指定日期的 redfox 调用统计信息。"""
+        default_stats = {
+            "date": date or datetime.now().strftime("%Y-%m-%d"),
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "endpoints": {},
+            "mp_stats": {},
+            "recent_logs": [],
+        }
+
+        if not self.is_connected:
+            print_warning("Redis未连接，返回默认统计信息")
+            return default_stats
+
+        try:
+            if date is None:
+                date = datetime.now().strftime("%Y-%m-%d")
+
+            pipe = self._client.pipeline()
+            pipe.get(f"werss:redfox:total:{date}")
+            pipe.get(f"werss:redfox:success:{date}")
+            pipe.get(f"werss:redfox:failed:{date}")
+            pipe.hgetall(f"werss:redfox:endpoint:{date}")
+            pipe.hgetall(f"werss:redfox:mp:{date}")
+            pipe.lrange("werss:redfox:logs", 0, 199)
+            results = pipe.execute()
+
+            total = int(results[0] or 0) if results[0] else 0
+            success = int(results[1] or 0) if results[1] else 0
+            failed = int(results[2] or 0) if results[2] else 0
+
+            # recent_logs 已存 JSON 字符串
+            recent_raw = results[5] or []
+            recent_logs: list = []
+            for entry in recent_raw:
+                try:
+                    recent_logs.append(json.loads(entry))
+                except (ValueError, TypeError):
+                    continue
+
+            return {
+                "date": date,
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "endpoints": results[3] or {},
+                "mp_stats": results[4] or {},
+                "recent_logs": recent_logs,
+            }
+        except redis.exceptions.ConnectionError as e:
+            print_error(f"Redis连接错误: {e}")
+            return default_stats
+        except Exception as e:
+            print_error(f"获取 redfox 调用统计失败: {e}")
+            return default_stats
+
+    def get_redfox_logs(self, limit: int = 100, offset: int = 0) -> list:
+        """分页获取 redfox 调用日志（按时间倒序）。"""
+        if not self.is_connected:
+            if not self.reconnect():
+                return []
+        try:
+            limit = max(1, min(int(limit or 100), 1000))
+            offset = max(0, int(offset or 0))
+            start = offset
+            stop = offset + limit - 1
+            entries = self._client.lrange("werss:redfox:logs", start, stop) or []
+            out: list = []
+            for entry in entries:
+                try:
+                    out.append(json.loads(entry))
+                except (ValueError, TypeError):
+                    continue
+            return out
+        except Exception as e:
+            print_error(f"获取 redfox 调用日志失败: {e}")
+            return []
+
+    def clear_redfox_logs(self) -> bool:
+        """清空 redfox 调用日志与统计（保留当日的端点 / 公众号维度数据）。"""
+        if not self.is_connected:
+            if not self.reconnect():
+                return False
+        try:
+            self._client.delete("werss:redfox:logs")
+            today = datetime.now().strftime("%Y-%m-%d")
+            keys = [
+                f"werss:redfox:total:{today}",
+                f"werss:redfox:success:{today}",
+                f"werss:redfox:failed:{today}",
+                f"werss:redfox:endpoint:{today}",
+                f"werss:redfox:mp:{today}",
+            ]
+            self._client.delete(*keys)
+            return True
+        except Exception as e:
+            print_error(f"清空 redfox 调用日志失败: {e}")
+            return False
+
 
 class RedisCache:
-    """Redis 缓存工具类
-    
-    提供通用的键值缓存功能，支持 JSON 序列化
-    """
-    
-    def __init__(self, key_prefix: str = "werss:cache"):
+    def __init__(self, key_prefix: str = "cache"):
         """初始化缓存
-        
+
         Args:
             key_prefix: 键前缀，用于区分不同模块的缓存
         """
         self.key_prefix = key_prefix
         self._client = None
-    
+
     def _get_client(self):
         """获取 Redis 客户端"""
         if self._client is not None:
@@ -454,14 +642,70 @@ def get_env_exception_stats(date: Optional[str] = None) -> Dict[str, Any]:
 
 def clear_env_exception(mp_id: str = "", url: str = "") -> bool:
     """清除环境异常记录（便捷函数）
-    
+
     当公众号采集成功后，清除该公众号相关的异常记录
-    
+
     Args:
         mp_id: 公众号ID，清除该公众号的所有异常记录
         url: 文章URL，清除该URL的异常记录
-        
+
     Returns:
         是否清除成功
     """
     return redis_client.clear_env_exception(mp_id, url)
+
+
+# ---------------------------------------------------------------------------
+# Redfox 调用日志便捷函数
+# ---------------------------------------------------------------------------
+def record_redfox_call(
+    endpoint: str,
+    code: int,
+    success: bool,
+    latency_ms: int,
+    mp_id: str = "",
+    request: Optional[Dict[str, Any]] = None,
+    error_msg: str = "",
+    http_status: int = 0,
+) -> bool:
+    """记录一次 redfox 数据接口调用日志。
+
+    Args:
+        endpoint: 接口路径（不含 base URL）。
+        code: redfox 业务状态码（2000 表示成功）。
+        success: 是否成功。
+        latency_ms: 请求耗时（毫秒）。
+        mp_id: 公众号 ID（可空）。
+        request: 请求体（仅记录关键字段）。
+        error_msg: 错误信息。
+        http_status: HTTP 状态码（0 表示未发出请求）。
+
+    Returns:
+        是否记录成功。
+    """
+    return redis_client.record_redfox_call(
+        endpoint=endpoint,
+        code=code,
+        success=success,
+        latency_ms=latency_ms,
+        mp_id=mp_id,
+        request=request,
+        error_msg=error_msg,
+        http_status=http_status,
+    )
+
+
+def get_redfox_stats(date: Optional[str] = None) -> Dict[str, Any]:
+    """获取 redfox 调用统计信息（按日期）。"""
+    return redis_client.get_redfox_stats(date)
+
+
+def get_redfox_logs(limit: int = 100, offset: int = 0) -> list:
+    """获取 redfox 调用日志（按时间倒序）。"""
+    return redis_client.get_redfox_logs(limit=limit, offset=offset)
+
+
+def clear_redfox_logs() -> bool:
+    """清空 redfox 调用日志与当日统计。"""
+    return redis_client.clear_redfox_logs()
+

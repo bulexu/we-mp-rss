@@ -137,6 +137,16 @@ gather:
   #浏览器类型 默认firefox 允许值 firefox/edge/webkit
   browser_type: ${BROWSER_TYPE:-firefox}
 
+# Redfox 数据接口配置（用于替代公众号平台扫码授权）
+# API 密钥从 https://redfox.hk/settings/api-keys 获取
+redfox:
+  # Redfox API Key，必填。可通过环境变量 REDFOX_API_KEY 注入
+  api_key: ${REDFOX_API_KEY:-}
+  # Redfox 接口基础地址，默认 https://redfox.hk
+  base_url: ${REDFOX_BASE_URL:-https://redfox.hk}
+  # 请求超时（秒）
+  timeout: ${REDFOX_TIMEOUT:-15}
+
 #代理配置
 proxy:
   #是否启用代理 默认False

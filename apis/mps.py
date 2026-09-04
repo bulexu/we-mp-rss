@@ -5,7 +5,6 @@ from fastapi.background import BackgroundTasks
 from core.auth import get_current_user_or_ak
 from core.db import DB
 from core.wx import search_Biz
-from driver.wx import Wx
 from .base import success_response, error_response
 from datetime import datetime
 from core.config import cfg
@@ -217,7 +216,7 @@ async def search_mp(
             status_code=status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
-                message=f"搜索公众号失败,请重新扫码授权！",
+                message=f"搜索公众号失败:{str(e)}",
             )
         )
 

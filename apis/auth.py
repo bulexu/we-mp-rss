@@ -19,39 +19,22 @@ from core.auth import (
 )
 from .ver import API_VERSION
 from .base import success_response, error_response
-from driver.base import WX_API
 from core.config import set_config, cfg
 from pydantic import BaseModel
 from typing import Optional
 
 router = APIRouter(prefix=f"/auth", tags=["认证"])
-from driver.success import Success
-from driver.wx_api import get_qr_code #通过API登录
-from driver.wx import WX_API
+
+
 def ApiSuccess(data):
-    if data != None:
-            print("\n登录结果:")
-            print(f"Token: {data['token']}")
-            set_config("token",data['token'])
-            cfg.reload()
+    """兼容旧版 Web 登录回调的占位实现。"""
+    if data is not None:
+        print("\n登录结果:")
+        print(f"Token: {data['token']}")
+        set_config("token", data['token'])
+        cfg.reload()
     else:
-            print("\n登录失败，请检查上述错误信息")
-@router.get("/qr/code", summary="获取登录二维码")
-async def get_qrcode(current_user=Depends(get_current_user)):
-
-    code_url=WX_API.GetCode(Success)
-    return success_response(code_url)
-@router.get("/qr/image", summary="获取登录二维码图片")
-async def qr_image(current_user=Depends(get_current_user)):
-    return success_response(WX_API.GetHasCode())
-
-@router.get("/qr/status",summary="获取扫描状态")
-async def qr_status(current_user=Depends(get_current_user)):
-    #  from driver.success import  getStatus
-     return success_response(WX_API.QrStatus())    
-@router.get("/qr/over",summary="扫码完成")
-async def qr_success(current_user=Depends(get_current_user)):
-     return success_response(await WX_API.Close())    
+        print("\n登录失败，请检查上述错误信息")
 @router.post("/login", summary="用户登录")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(form_data.username, form_data.password)
@@ -421,30 +404,4 @@ async def reset_password(req: ResetPasswordRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=error_response(code=50001, message=f"重置失败: {str(e)}")
-        )
-
-
-@router.post("/switch", summary="切换微信账号")
-async def switch_wechat_account(current_user: dict = Depends(get_current_user)):
-    """
-    切换微信公众号账号
-    
-    用法示例：
-    ```
-    POST /api/v1/auth/switch
-    Authorization: Bearer {token}
-    ```
-    """
-    import asyncio
-
-    try:
-        # 调用切换账号方法（异步）
-        result = await WX_API.switch_account()
-        return success_response(result, "切换账号成功" if result else "切换账号失败")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_response(code=50001, message=f"切换账号失败: {str(e)}")
         )

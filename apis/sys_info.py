@@ -6,10 +6,8 @@ from fastapi import APIRouter,Depends
 from typing import Dict, Any
 from core.auth import get_current_user_or_ak
 from .base import success_response, error_response
-from driver.token import wx_cfg
 from core.config import cfg
 from jobs.mps import TaskQueue
-from driver.success import getLoginInfo,getStatus
 router = APIRouter(prefix="/sys", tags=["系统信息"])
 def get_docker_version():
         try:
@@ -100,9 +98,17 @@ async def get_system_info(
         - system: 系统详细信息
     """
     try:
-      
-        from driver.token import get as get_val
         # 获取系统信息
+        from core.redis_client import get_redfox_stats
+        redfox_stats = get_redfox_stats() if redis_logging_enabled() else {"total": 0}
+        redfox_snapshot = {
+            "configured": bool(
+                cfg.get("redfox.api_key", "") or _redfox_key_from_env()
+            ),
+            "today_total": int(redfox_stats.get("total", 0) or 0),
+            "today_success": int(redfox_stats.get("success", 0) or 0),
+            "today_failed": int(redfox_stats.get("failed", 0) or 0),
+        }
         system_info = {
             'os': {
                 'name': platform.system(),
@@ -121,12 +127,7 @@ async def get_system_info(
             'core_version': CORE_VERSION,
             'latest_version':LATEST_VERSION,
             'need_update':CORE_VERSION != LATEST_VERSION,
-            "wx":{
-                'token':get_val('token',''),
-                'expiry_time':get_val('expiry.expiry_time','') if getStatus() else "",
-                "info":getLoginInfo(),
-                "login":getStatus(),
-            },
+            "redfox": redfox_snapshot,
             "article":get_article_info(),
             'queue':TaskQueue.get_queue_info(),
         }
@@ -136,3 +137,18 @@ async def get_system_info(
             code=50001,
             message=f"获取系统信息失败: {str(e)}"
         )
+
+
+def _redfox_key_from_env() -> str:
+    """读取环境变量中的 REDFOX_API_KEY，避免直接依赖 core.config 的 cache。"""
+    import os
+    return os.getenv("REDFOX_API_KEY", "").strip()
+
+
+def redis_logging_enabled() -> bool:
+    """探测 Redis 是否可用，避免在 sys_info 中阻塞。"""
+    try:
+        from core.redis_client import redis_client
+        return bool(redis_client and redis_client.is_connected)
+    except Exception:  # noqa: BLE001
+        return False

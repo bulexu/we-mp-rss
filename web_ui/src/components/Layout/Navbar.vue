@@ -11,12 +11,6 @@
         </template>
         订阅管理
       </a-menu-item>
-      <a-menu-item key="/wechat-status">
-        <template #icon>
-          <icon-wechat />
-        </template>
-        授权管理
-      </a-menu-item>
       <a-menu-item key="/export/records">
         <template #icon>
           <icon-export />
@@ -76,6 +70,12 @@
           <icon-exclamation-circle />
         </template>
         异常统计
+      </a-menu-item>
+      <a-menu-item key="/redfox/logs">
+        <template #icon>
+          <icon-safe />
+        </template>
+        Redfox 日志
       </a-menu-item>
        <a-menu-item key="/configs">
         <template #icon>

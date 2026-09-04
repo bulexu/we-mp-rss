@@ -1,0 +1,1 @@
+import{v as e}from"./http-BObEXt-b.js";export{e as getArticles};

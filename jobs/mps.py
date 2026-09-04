@@ -8,8 +8,6 @@ from core.task import TaskScheduler
 from core.models.feed import Feed
 from core.config import cfg,DEBUG
 from core.print import print_info,print_success,print_error
-from driver.wx import WX_API
-from driver.success import Success
 from core.redis_client import clear_env_exception
 wx_db=db.Db(tag="任务调度")
 def fetch_all_article():

@@ -3,17 +3,42 @@ import requests
 import json
 import re
 import time
+from typing import Any, Dict
 from core.models import Feed
 from core.db import DB
 from core.models.base import DATA_STATUS
 from core.models.feed import Feed
-from .cfg import cfg,wx_cfg
+from core.config import cfg
 from core.print import print_error,print_info, print_warning, print_success
 from core.rss import RSS
-from driver.success import setStatus,CanGetToken
 from driver.wxarticle import Web
 from core.wait import Wait
 import random
+
+
+def _map_account_info(data: Dict[str, Any]) -> Dict[str, Any]:
+    """把 redfox accountInfo 返回的数据映射为旧 searchbiz 字段。
+
+    保留 ``fakeid``、``nickname``、``round_head_img``、``signature`` 等旧字段，
+    以便 ``AddSubscription.vue`` 等前端代码无须改动即可继续工作。
+    """
+    biz_info = data.get("bizInfo") or ""
+    return {
+        "fakeid": biz_info,
+        "nickname": data.get("accountName") or "",
+        "round_head_img": data.get("avatarUrl") or "",
+        "signature": data.get("description") or "",
+        "alias": data.get("account") or "",
+        # 新增字段，便于后续业务使用
+        "wxId": data.get("wxId") or "",
+        "qrcodeUrl": data.get("qrcodeUrl") or "",
+        "verifyInfo": data.get("verifyInfo") or "",
+        "account": data.get("account") or "",
+        "accountName": data.get("accountName") or "",
+        "avatarUrl": data.get("avatarUrl") or "",
+        "bizInfo": biz_info,
+        "description": data.get("description") or "",
+    }
 # 定义一些常见的 User-Agent
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -72,22 +97,28 @@ class WxGather:
         self._cookies={}
         self.start_time = None  # 记录开始时间
         session=  requests.Session()
-        timeout = (5, 10)  
+        timeout = (5, 10)
         session.timeout = timeout # type: ignore
         self.session=session
         self.get_token()
     def get_token(self):
+        """加载基础采集配置。
+
+        注意：自 1.6 起，本项目已不再依赖微信公众平台的扫码授权（不再
+        读取 cookie / token），公众号信息与作品列表改由 redfox 数据
+        接口提供。本方法保留仅为兼容历史调用，请勿再依赖 ``self.token``
+        或 ``self.cookies`` 字段。
+        """
         cfg.reload()
-        from driver.token import get as get_token_val
         self.Gather_Content=cfg.get('gather.content',False)
-        self.cookies = get_token_val('cookie', '')
-        self.token=get_token_val('token','')
+        # 兼容旧代码：保留同名属性，但已不再使用
+        self.cookies = ""
+        self.token = ""
         # 随机选择一个 User-Agent
         self.user_agent = cfg.get('user_agent', '')
         user_agent = random.choice(USER_AGENTS)
         self.user_agent=user_agent
         self.headers = {
-            "Cookie":self.cookies,
             "User-Agent": user_agent
         }
         # 加载代理配置
@@ -184,7 +215,6 @@ class WxGather:
     def FillBack(self,CallBack=None,data=None,Ext_Data=None):
         if CallBack is not None:
             if data is not  None:
-                setStatus(True)
                 from core.models import Article
                 from datetime import datetime
                 # 文章基础属性
@@ -243,64 +273,104 @@ class WxGather:
                     # art.pop("content")
                     self.articles.append(art)
 
-    #通过公众号码平台接口查询公众号
-    def search_Biz(self,kw:str="",limit=10,offset=0):
+    #通过 redfox 数据接口查询公众号
+    # 自 1.6 起，不再依赖微信公众平台的 searchbiz 接口；
+    # 改为通过 redfox.hk 的 /story/api/gzh/data/accountInfo 查询账号信息，
+    # 通过 /story/api/gzh/data/queryWorkList 拉取作品列表。
+    def search_Biz(self, kw: str = "", limit: int = 10, offset: int = 0):
+        """搜索公众号账号信息。
 
+        Args:
+            kw: 公众号名称或微信号。
+            limit: 返回条数上限（兼容旧接口语义，redfox 单次只能返回 1 条）。
+            offset: 兼容旧接口语义，redfox 接口暂不提供 offset 入参。
+
+        Returns:
+            与旧 searchbiz 兼容的字典::
+
+                {
+                    "list": [
+                        {
+                            "fakeid": ...,          # 来自 bizInfo（Base64）
+                            "nickname": ...,        # 来自 accountName
+                            "round_head_img": ...,  # 来自 avatarUrl
+                            "signature": ...,       # 来自 description
+                            "alias": ...,           # 来自 account
+                            "wxId": ...,
+                            "qrcodeUrl": ...,
+                            "verifyInfo": ...,
+                        }
+                    ],
+                    "total": int,
+                    "base_resp": {"ret": int, "err_msg": str},
+                }
+
+            失败时 ``base_resp.ret`` 为非 0，``list`` 为空。
+        """
         self.get_token()
-        url = "https://mp.weixin.qq.com/cgi-bin/searchbiz"
-        params = {
-            "action": "search_biz",
-            "begin":offset,
-            "count": limit,
-            "query": kw,
-            "token":  self.token,
-            "lang": "zh_CN",
-            "f": "json",
-            "ajax": "1"
-        }
-        headers=self.fix_header(url)
-        if self.token is None or self.token == "":
-            self.Error("请先扫码登录公众号平台")
-            return
-        data={}
+        kw = (kw or "").strip()
+        if not kw:
+            return {
+                "list": [],
+                "total": 0,
+                "base_resp": {"ret": 0, "err_msg": ""},
+            }
+
+        from core.redfox import RedfoxError, get_account_info
+
+        base_resp = {"ret": 0, "err_msg": ""}
+        item: Dict[str, Any] = {}
         try:
-            proxies = self._get_proxies()
-            response = requests.get(
-            url,
-            params=params,
-            headers=headers,
-            proxies=proxies,    #type: ingnore
-            ) #type: ignore
-            response.raise_for_status()  # 检查状态码是否为200
-            data = response.text  # 解析JSON数据
-            msg = json.loads(data)  # 手动解析
-            if msg['base_resp']['ret'] == 200013:
-                self.Error("frequencey control, stop at {}".format(str(kw)))
-                return
-            if msg['base_resp']['ret'] != 0:
-                self.Error("错误原因:{}:代码:{}".format(msg['base_resp']['err_msg'],msg['base_resp']['ret']),code="Invalid Session")
-                return 
-            if 'publish_page' in msg:
-                msg['publish_page']=json.loads(msg['publish_page'])
-        except Exception as e:
-            print_error(f"请求失败: {e}")
-            raise e
-        return msg
-    
-    
-    
+            # 优先级：account（微信号）> wxId（gh_ 前缀）> bizInfo
+            data = get_account_info(account=kw)
+            item = _map_account_info(data)
+            items = [item]
+        except RedfoxError as e:
+            msg = str(e)
+            # 关键词为账号 ID 时退回 wxId 字段再试一次。
+            if kw.startswith("gh_"):
+                try:
+                    data = get_account_info(wxId=kw)
+                    item = _map_account_info(data)
+                    items = [item]
+                except RedfoxError as e2:
+                    base_resp = {"ret": -1, "err_msg": str(e2)}
+                    items = []
+            else:
+                base_resp = {"ret": -1, "err_msg": msg}
+                items = []
+        except Exception as e:  # noqa: BLE001
+            print_error(f"redfox 账号查询异常: {e}")
+            base_resp = {"ret": -1, "err_msg": str(e)}
+            items = []
+
+        # limit/offset 兼容旧语义；redfox 单次只返回 1 条，这里截断兜底。
+        try:
+            limit = int(limit) if limit else 10
+        except (TypeError, ValueError):
+            limit = 10
+        if offset:
+            items = items[int(offset):] if int(offset) < len(items) else []
+        items = items[: max(1, limit)]
+
+        return {
+            "list": items,
+            "total": len(items),
+            "base_resp": base_resp,
+        }
+
+
+
     def Start(self,mp_id=None):
         try:
             self.articles=[]
             self.get_token()
-            if self.token=="" or self.token is None:
-                self.Error("请先扫码登录公众号平台")
-                return
+            # 自 1.6 起不再校验 token；redfox 接口由各子模型按需调用。
             import time
             self.start_time = time.time()  # 记录开始执行时间
             self.update_mps(
                 mp_id, #type: ingnore
-                            Feed( 
+                            Feed(
             sync_time=int(time.time()),
             update_time=int(time.time()),
             ))
@@ -310,7 +380,6 @@ class WxGather:
     def Item_Over(self,item=None,CallBack=None):
         print(f"item end")
         _cookies=[{'name': c.name, 'value': c.value, 'domain': c.domain,'expiry':c.expires,'expires':c.expires} for c in self._cookies]
-        _cookies.append({'name':'token','value':self.token})
         if CallBack is not None:
             CallBack(item)
         self.Wait(tips=f"{item['mps_title']} 处理完成",min=3,max=10) #type: ignore
@@ -318,16 +387,9 @@ class WxGather:
     def Error(self,error:str,code=None):
         self.Over()
         if code=="Invalid Session":
-            # from core.queue import TaskQueue
-            # TaskQueue.clear_queue()  # 已注释：避免微信认证失效时清空队列
-            if cfg.get("server.send_code")=="True":
-                from jobs.failauth import send_wx_code
-                import threading
-                setStatus(False)
-                threading.Thread(target=send_wx_code,args=(f"公众号平台登录失效,请重新登录",)).start()
-            # send_wx_code(f"公众号平台登录失效,请重新登录")
+            # 兼容旧调用方：redfox 接口理论上不会返回该值，但保留分支以免破坏上层 try/except。
             raise Exception(error)
-        # raise Exception(error)
+        # 默认仅打印错误，不再抛出，避免中断后续公众号的采集。
         print_error(error)
 
     def Over(self,CallBack=None):
