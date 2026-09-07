@@ -220,6 +220,10 @@ def _run_batch(feeds, task, isTest, max_workers):
     异常并通过 ``tracker`` 记录结果,这里只在出现未预期异常时打印告警,
     不抛出 —— 避免 TaskQueue 整体重试造成已成功的公众号重复采集。
 
+    为支持"并行子任务"前端展示,每个 feed 实际执行前后会通过
+    :meth:`TaskQueue.add_subtask` / :meth:`remove_subtask` 注册 / 注销
+    一条 ``mp_name`` 子任务;batch 结束时 ``clear_subtasks`` 清干净。
+
     Args:
         feeds: 待采集 feed 列表(可能为空)。
         task: 关联的 ``MessageTask``,``None`` 表示临时批量入队(如添加公众号
@@ -238,22 +242,38 @@ def _run_batch(feeds, task, isTest, max_workers):
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    with ThreadPoolExecutor(
-        max_workers=effective_workers,
-        thread_name_prefix="fe-fetch",
-    ) as executor:
-        futures = {
-            executor.submit(do_job, feed, task, isTest): feed
-            for feed in target
-        }
-        for fut in as_completed(futures):
-            feed = futures[fut]
-            try:
-                fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print_error(
-                    f"并发采集未捕获异常 [{feed.mp_name}]: {exc}"
-                )
+    # 清掉上一批可能残留的子任务(理论上不会发生,因为 TaskQueue 串行调度
+    # 单条 _run_batch,但防御性调用避免 stale)。
+    TaskQueue.clear_subtasks()
+
+    def _run_with_subtask(feed):
+        """包一层:每个 feed 实际执行前注册,结束后注销(无论成败)。"""
+        TaskQueue.add_subtask(feed.mp_name)
+        try:
+            do_job(feed, task, isTest)
+        finally:
+            TaskQueue.remove_subtask(feed.mp_name)
+
+    try:
+        with ThreadPoolExecutor(
+            max_workers=effective_workers,
+            thread_name_prefix="fe-fetch",
+        ) as executor:
+            futures = {
+                executor.submit(_run_with_subtask, feed): feed
+                for feed in target
+            }
+            for fut in as_completed(futures):
+                feed = futures[fut]
+                try:
+                    fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    print_error(
+                        f"并发采集未捕获异常 [{feed.mp_name}]: {exc}"
+                    )
+    finally:
+        # 整个 batch 结束后,无论是否中途异常,确保子任务列表清空。
+        TaskQueue.clear_subtasks()
 
 
 def add_job(feeds: list[Feed] = None, task: MessageTask = None, isTest=False):

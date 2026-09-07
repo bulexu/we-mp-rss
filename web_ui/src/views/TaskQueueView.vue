@@ -70,6 +70,20 @@
                 <icon-pause-circle style="font-size: 18px; color: #c9cdd4" />
                 <span>暂无执行中任务</span>
               </div>
+
+              <!-- 并行子任务:同一 batch 任务内部并发执行的 feed 列表 -->
+              <div v-if="mainQueueStatus.current_subtasks && mainQueueStatus.current_subtasks.length > 0" class="subtasks">
+                <div class="subtasks-title">
+                  <icon-mind-mapping style="color: #165dff; font-size: 12px" />
+                  并行执行中 ({{ mainQueueStatus.current_subtasks.length }})
+                </div>
+                <div class="task-list">
+                  <a-tag v-for="(sub, idx) in mainQueueStatus.current_subtasks" :key="idx" color="green" size="small" class="subtask-tag">
+                    <icon-sync style="font-size: 11px; margin-right: 2px" />
+                    {{ sub.task_name }}
+                  </a-tag>
+                </div>
+              </div>
             </div>
             
             <!-- 待执行任务 -->
@@ -156,6 +170,20 @@
               <div v-else class="no-task">
                 <icon-pause-circle style="font-size: 18px; color: #c9cdd4" />
                 <span>暂无执行中任务</span>
+              </div>
+
+              <!-- 并行子任务:补抓队列当前没有并发执行,正常不会展示 -->
+              <div v-if="contentQueueStatus.current_subtasks && contentQueueStatus.current_subtasks.length > 0" class="subtasks">
+                <div class="subtasks-title">
+                  <icon-mind-mapping style="color: #165dff; font-size: 12px" />
+                  并行执行中 ({{ contentQueueStatus.current_subtasks.length }})
+                </div>
+                <div class="task-list">
+                  <a-tag v-for="(sub, idx) in contentQueueStatus.current_subtasks" :key="idx" color="green" size="small" class="subtask-tag">
+                    <icon-sync style="font-size: 11px; margin-right: 2px" />
+                    {{ sub.task_name }}
+                  </a-tag>
+                </div>
               </div>
             </div>
             
@@ -666,6 +694,34 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--color-text-3);
   padding: 2px 6px;
+}
+
+/* 并行子任务区(batch 任务内部并发执行的 feed 列表) */
+.subtasks {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--color-fill-1, #f7f8fa);
+  border-radius: 4px;
+  border-left: 2px solid #165dff;
+}
+
+.subtasks-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-2);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.subtask-tag {
+  animation: subtask-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes subtask-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 /* 历史记录 */

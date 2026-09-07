@@ -158,6 +158,10 @@ class TaskQueueManager:
         self._current_task: Optional[TaskRecord] = None
         # 待执行任务列表（用于展示）
         self._pending_items: list[TaskItem] = []
+        # 并行子任务（当前 batch 任务内部并发跑的各个 feed）
+        # key=subtask 名(通常是 mp_name),value={task_name, start_time, status}
+        self._current_subtasks: dict[str, dict] = {}
+        self._subtasks_lock = threading.Lock()
         self._instance_id = id(self)
         
         # Redis 键前缀配置
@@ -190,14 +194,68 @@ class TaskQueueManager:
         redis_client = _get_redis()
         if not redis_client:
             return
-        
+
         try:
             if task_record:
-                redis_client.hset(self._redis_keys['current'], mapping=task_record.to_dict())
+                mapping = dict(task_record.to_dict())
+                # 把当前 subtasks 一起塞进去,避免前端需要两次读
+                mapping["subtasks_json"] = json.dumps(
+                    list(self._current_subtasks.values()),
+                    ensure_ascii=False,
+                )
+                redis_client.hset(self._redis_keys['current'], mapping=mapping)
             else:
                 redis_client.delete(self._redis_keys['current'])
         except Exception as e:
             print_error(f"保存当前任务到 Redis 失败: {e}")
+
+    # ------------------------------------------------------------------
+    # 子任务(subtask)管理:用于展示一个 batch 任务内部的并行子项
+    # ------------------------------------------------------------------
+
+    def add_subtask(self, name: str) -> None:
+        """注册一个并行子任务(比如 batch 内部的一个 feed 开始采集)。
+
+        调用方负责在结束时调 :meth:`remove_subtask`。
+        同一 ``name`` 重复 add 不会重复入列表(去重)。
+        """
+        broadcast_needed = False
+        with self._subtasks_lock:
+            if name not in self._current_subtasks:
+                self._current_subtasks[name] = {
+                    "task_name": name,
+                    "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "running",
+                }
+                broadcast_needed = True
+        if broadcast_needed:
+            self._save_current_task_to_redis(self._current_task)
+            self._save_status_to_redis()
+            _broadcast_queue_status()
+
+    def remove_subtask(self, name: str) -> None:
+        """移除一个并行子任务(feed 采集完成 / 失败时调用)。"""
+        broadcast_needed = False
+        with self._subtasks_lock:
+            if name in self._current_subtasks:
+                del self._current_subtasks[name]
+                broadcast_needed = True
+        if broadcast_needed:
+            self._save_current_task_to_redis(self._current_task)
+            self._save_status_to_redis()
+            _broadcast_queue_status()
+
+    def clear_subtasks(self) -> None:
+        """清空当前所有子任务(batch 结束时调用)。"""
+        broadcast_needed = False
+        with self._subtasks_lock:
+            if self._current_subtasks:
+                self._current_subtasks.clear()
+                broadcast_needed = True
+        if broadcast_needed:
+            self._save_current_task_to_redis(self._current_task)
+            self._save_status_to_redis()
+            _broadcast_queue_status()
     
     def _save_history_to_redis(self, task_record: TaskRecord):
         """保存历史记录到 Redis"""
@@ -539,17 +597,19 @@ class TaskQueueManager:
     
     def get_detailed_status(self) -> dict:
         """
-        获取队列的详细状态信息（从 Redis 读取，支持多进程）
-        
+        获取队列的详细状态信息(从 Redis 读取,支持多进程)
+
         返回:
-            dict: 包含详细队列信息的字典
+            dict: 包含详细队列信息的字典,包含 ``current_subtasks`` —
+                 当前 batch 任务内部并行执行的所有子项(典型为 feed 名)。
         """
         # 从 Redis 获取数据
         pending_list = self._get_pending_from_redis()
         history_list = self._get_history_from_redis(20)
         history_count = self._get_history_count_from_redis()
         current_task = self._get_current_task_from_redis()
-        
+        current_subtasks = self._get_current_subtasks_from_redis()
+
         # 获取运行状态
         redis_client = _get_redis()
         is_running = self._is_running
@@ -560,16 +620,32 @@ class TaskQueueManager:
                     is_running = status['is_running'] == 'true'
             except Exception:
                 pass
-        
+
         return {
             'tag': self.tag,
             'is_running': is_running,
             'pending_count': len(pending_list),
             'pending_tasks': pending_list,
             'current_task': current_task,
+            'current_subtasks': current_subtasks,
             'history_count': history_count,
             'recent_history': history_list
         }
+
+    def _get_current_subtasks_from_redis(self) -> list[dict]:
+        """从 Redis 读取当前 batch 内的并行子任务列表。"""
+        redis_client = _get_redis()
+        if not redis_client:
+            return list(self._current_subtasks.values())
+        try:
+            raw = redis_client.hget(self._redis_keys['current'], "subtasks_json")
+            if not raw:
+                return []
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            # Redis 不可用或解析失败,回落到内存(只对当前进程可见)
+            return list(self._current_subtasks.values())
     
     def clear_history(self) -> None:
         """清空任务历史记录"""

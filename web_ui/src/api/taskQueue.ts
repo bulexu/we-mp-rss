@@ -22,12 +22,20 @@ export interface CurrentTask {
   status: string;
 }
 
+// 一个 batch 任务内部并行执行的子任务,典型为 feed 名(公众号名)
+export interface CurrentSubtask {
+  task_name: string;
+  start_time: string;
+  status: 'running' | 'completed' | 'failed';
+}
+
 export interface QueueStatus {
   tag: string;
   is_running: boolean;
   pending_count: number;
   pending_tasks: PendingTask[];
   current_task: CurrentTask | null;
+  current_subtasks?: CurrentSubtask[];
   history_count: number;
   recent_history: TaskRecord[];
 }
@@ -97,6 +105,7 @@ const normalizeQueueStatus = (data: any): QueueStatus => {
       pending_count: data.pending_count || 0,
       pending_tasks: data.pending_tasks || [],
       current_task: data.current_task || null,
+      current_subtasks: Array.isArray(data.current_subtasks) ? data.current_subtasks : [],
       history_count: data.history_count || 0,
       recent_history: data.recent_history || [],
     };
@@ -107,6 +116,7 @@ const normalizeQueueStatus = (data: any): QueueStatus => {
     pending_count: 0,
     pending_tasks: [],
     current_task: null,
+    current_subtasks: [],
     history_count: 0,
     recent_history: [],
   };
