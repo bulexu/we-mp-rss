@@ -108,8 +108,8 @@ class RedisClient:
             today = datetime.now().strftime("%Y-%m-%d")
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 使用Redis事务确保原子性
-            pipe = self._client.pipeline()
+            # 使用Redis管道批处理（transaction=False 避免依赖 MULTI/EXEC，统计场景不需要原子性）
+            pipe = self._client.pipeline(transaction=False)
             
             # 1. 总计数器 (按日期)
             pipe.incr(f"werss:env_exception:total:{today}")
@@ -226,8 +226,8 @@ class RedisClient:
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             
-            # 使用Redis事务确保原子性
-            pipe = self._client.pipeline()
+            # 使用Redis管道批处理（transaction=False 避免依赖 MULTI/EXEC，统计场景不需要原子性）
+            pipe = self._client.pipeline(transaction=False)
             
             # 清除公众号维度的异常统计
             if mp_id:
@@ -308,7 +308,7 @@ class RedisClient:
             today = datetime.now().strftime("%Y-%m-%d")
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            pipe = self._client.pipeline()
+            pipe = self._client.pipeline(transaction=False)
 
             # 1. 当日总调用次数
             pipe.incr(f"werss:redfox:total:{today}")
@@ -379,7 +379,7 @@ class RedisClient:
             if date is None:
                 date = datetime.now().strftime("%Y-%m-%d")
 
-            pipe = self._client.pipeline()
+            pipe = self._client.pipeline(transaction=False)
             pipe.get(f"werss:redfox:total:{date}")
             pipe.get(f"werss:redfox:success:{date}")
             pipe.get(f"werss:redfox:failed:{date}")
