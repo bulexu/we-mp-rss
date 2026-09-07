@@ -245,6 +245,34 @@ class TaskQueueManager:
             self._save_status_to_redis()
             _broadcast_queue_status()
 
+    def mark_subtask_completed(
+        self, name: str, success: bool = True, error: str = ""
+    ) -> None:
+        """标记一个并行子任务结束(成功或失败),保留在列表中以便前端展示进度。
+
+        与 :meth:`remove_subtask` 的区别:
+            * ``remove_subtask`` 直接从列表删除 —— 适合"不想让用户看到已完成项"的场景。
+            * ``mark_subtask_completed`` 保留条目,只把 ``status`` 改成 ``completed`` /
+              ``failed`` 并补充 ``end_time`` / ``error``,适合展示"哪些跑完了 / 哪些还在跑"。
+              条目会在 :meth:`clear_subtasks` 时统一清理(通常一个 batch 结束时)。
+        """
+        broadcast_needed = False
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._subtasks_lock:
+            sub = self._current_subtasks.get(name)
+            if sub is None:
+                # 已不在列表里(可能并发被 remove / clear),忽略
+                return
+            sub["end_time"] = now
+            sub["status"] = "completed" if success else "failed"
+            if error:
+                sub["error"] = error
+            broadcast_needed = True
+        if broadcast_needed:
+            self._save_current_task_to_redis(self._current_task)
+            self._save_status_to_redis()
+            _broadcast_queue_status()
+
     def clear_subtasks(self) -> None:
         """清空当前所有子任务(batch 结束时调用)。"""
         broadcast_needed = False

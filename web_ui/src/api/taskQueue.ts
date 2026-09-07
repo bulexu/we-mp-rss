@@ -26,7 +26,9 @@ export interface CurrentTask {
 export interface CurrentSubtask {
   task_name: string;
   start_time: string;
+  end_time?: string | null;
   status: 'running' | 'completed' | 'failed';
+  error?: string;
 }
 
 export interface QueueStatus {

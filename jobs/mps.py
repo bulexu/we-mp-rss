@@ -163,13 +163,13 @@ class MessageTaskTracker:
         with self._task_lock:
             if task_id not in self._tasks:
                 return
-            
+
             task_info = self._tasks[task_id]
             if success:
                 task_info['completed'] += 1
             else:
                 task_info['failed'] += 1
-            
+
             task_info['mp_results'].append({
                 'mp_name': mp_name,
                 'success': success,
@@ -177,14 +177,26 @@ class MessageTaskTracker:
                 'error': error,
                 'time': datetime.now().isoformat()
             })
-            
+
             # 打印进度
             progress = task_info['completed'] + task_info['failed']
             print_info(f"任务进度 [{task_id}]: {progress}/{task_info['total']} (成功:{task_info['completed']}, 失败:{task_info['failed']})")
-            
+
             # 检查是否全部完成
             if progress >= task_info['total']:
                 self._finish_task(task_id)
+
+        # 同步更新队列子任务状态为 completed/failed(保留到 batch 结束),
+        # 让前端能看到"哪些 feed 还在跑、哪些已完成/失败"。
+        # 解锁后再调,避免与 _subtasks_lock 嵌套死锁。
+        try:
+            TaskQueue.mark_subtask_completed(
+                mp_name,
+                success=success,
+                error=error or "",
+            )
+        except Exception as mark_exc:  # noqa: BLE001
+            print_error(f"标记 subtask 完成态失败 [{mp_name}]: {mark_exc}")
     
     def _finish_task(self, task_id: str) -> None:
         """任务完成"""
@@ -247,12 +259,26 @@ def _run_batch(feeds, task, isTest, max_workers):
     TaskQueue.clear_subtasks()
 
     def _run_with_subtask(feed):
-        """包一层:每个 feed 实际执行前注册,结束后注销(无论成败)。"""
+        """包一层:每个 feed 实际执行前注册,结束后标记完成/失败。
+
+        不在 ``finally`` 里 ``remove_subtask`` —— 因为 :func:`do_job` 内部
+        已通过 :class:`MessageTaskTracker` 调用 :meth:`TaskQueue.mark_subtask_completed`,
+        把 subtask 状态切到 ``completed`` / ``failed`` 并保留到 batch 结束。
+        这里再 remove 会立即把刚标记的状态擦掉,前端看不到完成态。
+
+        ``do_job`` 通常不抛异常(fetcher 错误已在内部捕获);万一真抛出来,
+        这里兜底标 failed 后再 rethrow,让外层 :func:`_run_batch` 记录。
+        """
         TaskQueue.add_subtask(feed.mp_name)
         try:
             do_job(feed, task, isTest)
-        finally:
-            TaskQueue.remove_subtask(feed.mp_name)
+        except Exception as unhandled_exc:  # noqa: BLE001
+            TaskQueue.mark_subtask_completed(
+                feed.mp_name,
+                success=False,
+                error=f"unhandled: {unhandled_exc}",
+            )
+            raise
 
     try:
         with ThreadPoolExecutor(

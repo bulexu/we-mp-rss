@@ -75,11 +75,30 @@
               <div v-if="mainQueueStatus.current_subtasks && mainQueueStatus.current_subtasks.length > 0" class="subtasks">
                 <div class="subtasks-title">
                   <icon-mind-mapping style="color: #165dff; font-size: 12px" />
-                  并行执行中 ({{ mainQueueStatus.current_subtasks.length }})
+                  并行子任务
+                  <span class="subtasks-stats">
+                    <span class="stat-running" v-if="mainSubtasksStats.running > 0">
+                      <icon-sync style="font-size: 10px" /> {{ mainSubtasksStats.running }}
+                    </span>
+                    <span class="stat-completed" v-if="mainSubtasksStats.completed > 0">
+                      <icon-check-circle-fill style="font-size: 10px" /> {{ mainSubtasksStats.completed }}
+                    </span>
+                    <span class="stat-failed" v-if="mainSubtasksStats.failed > 0">
+                      <icon-close-circle-fill style="font-size: 10px" /> {{ mainSubtasksStats.failed }}
+                    </span>
+                    <span class="stat-total">/ {{ mainSubtasksStats.total }}</span>
+                  </span>
                 </div>
                 <div class="task-list">
-                  <a-tag v-for="(sub, idx) in mainQueueStatus.current_subtasks" :key="idx" color="green" size="small" class="subtask-tag">
-                    <icon-sync style="font-size: 11px; margin-right: 2px" />
+                  <a-tag
+                    v-for="(sub, idx) in mainQueueStatus.current_subtasks"
+                    :key="idx"
+                    :color="getSubtaskColor(sub.status)"
+                    size="small"
+                    class="subtask-tag"
+                    :class="{ 'subtask-running': sub.status === 'running' }"
+                  >
+                    <component :is="getSubtaskIcon(sub.status)" style="font-size: 11px; margin-right: 2px" />
                     {{ sub.task_name }}
                   </a-tag>
                 </div>
@@ -176,11 +195,30 @@
               <div v-if="contentQueueStatus.current_subtasks && contentQueueStatus.current_subtasks.length > 0" class="subtasks">
                 <div class="subtasks-title">
                   <icon-mind-mapping style="color: #165dff; font-size: 12px" />
-                  并行执行中 ({{ contentQueueStatus.current_subtasks.length }})
+                  并行子任务
+                  <span class="subtasks-stats">
+                    <span class="stat-running" v-if="contentSubtasksStats.running > 0">
+                      <icon-sync style="font-size: 10px" /> {{ contentSubtasksStats.running }}
+                    </span>
+                    <span class="stat-completed" v-if="contentSubtasksStats.completed > 0">
+                      <icon-check-circle-fill style="font-size: 10px" /> {{ contentSubtasksStats.completed }}
+                    </span>
+                    <span class="stat-failed" v-if="contentSubtasksStats.failed > 0">
+                      <icon-close-circle-fill style="font-size: 10px" /> {{ contentSubtasksStats.failed }}
+                    </span>
+                    <span class="stat-total">/ {{ contentSubtasksStats.total }}</span>
+                  </span>
                 </div>
                 <div class="task-list">
-                  <a-tag v-for="(sub, idx) in contentQueueStatus.current_subtasks" :key="idx" color="green" size="small" class="subtask-tag">
-                    <icon-sync style="font-size: 11px; margin-right: 2px" />
+                  <a-tag
+                    v-for="(sub, idx) in contentQueueStatus.current_subtasks"
+                    :key="idx"
+                    :color="getSubtaskColor(sub.status)"
+                    size="small"
+                    class="subtask-tag"
+                    :class="{ 'subtask-running': sub.status === 'running' }"
+                  >
+                    <component :is="getSubtaskIcon(sub.status)" style="font-size: 11px; margin-right: 2px" />
                     {{ sub.task_name }}
                   </a-tag>
                 </div>
@@ -247,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import {
   IconRefresh,
@@ -262,6 +300,7 @@ import {
   getSchedulerJobs,
   getQueueHistory,
   type QueueStatus,
+  type CurrentSubtask,
   type SchedulerStatus,
   type SchedulerJob,
   type TaskRecord,
@@ -401,6 +440,49 @@ const getStatusColor = (status: string) => {
       return 'gray'
   }
 }
+
+// 子任务状态颜色(running 单独给绿色脉冲,completed 蓝色,failed 红色)
+const getSubtaskColor = (status: string) => {
+  switch (status) {
+    case 'running':
+      return 'green'
+    case 'completed':
+      return 'arcoblue'
+    case 'failed':
+      return 'red'
+    default:
+      return 'gray'
+  }
+}
+
+// 子任务状态对应图标
+const getSubtaskIcon = (status: string) => {
+  switch (status) {
+    case 'running':
+      return 'icon-sync'
+    case 'completed':
+      return 'icon-check-circle-fill'
+    case 'failed':
+      return 'icon-close-circle-fill'
+    default:
+      return 'icon-question-circle'
+  }
+}
+
+// 汇总当前 subtasks 的状态计数
+const computeSubtaskStats = (subs?: CurrentSubtask[]) => {
+  const list = subs || []
+  const stats = { total: list.length, running: 0, completed: 0, failed: 0 }
+  for (const s of list) {
+    if (s.status === 'running') stats.running += 1
+    else if (s.status === 'completed') stats.completed += 1
+    else if (s.status === 'failed') stats.failed += 1
+  }
+  return stats
+}
+
+const mainSubtasksStats = computed(() => computeSubtaskStats(mainQueueStatus.value.current_subtasks))
+const contentSubtasksStats = computed(() => computeSubtaskStats(contentQueueStatus.value.current_subtasks))
 
 // 获取状态文本
 const getStatusText = (status: string) => {
@@ -715,7 +797,51 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+.subtasks-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: normal;
+}
+
+.subtasks-stats .stat-running,
+.subtasks-stats .stat-completed,
+.subtasks-stats .stat-failed,
+.subtasks-stats .stat-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.subtasks-stats .stat-running {
+  color: #00b42a;
+  background: rgba(0, 180, 42, 0.08);
+}
+
+.subtasks-stats .stat-completed {
+  color: #165dff;
+  background: rgba(22, 93, 255, 0.08);
+}
+
+.subtasks-stats .stat-failed {
+  color: #f53f3f;
+  background: rgba(245, 63, 63, 0.08);
+}
+
+.subtasks-stats .stat-total {
+  color: var(--color-text-3);
+}
+
 .subtask-tag {
+  transition: opacity 0.3s ease;
+}
+
+.subtask-running {
   animation: subtask-pulse 1.6s ease-in-out infinite;
 }
 
