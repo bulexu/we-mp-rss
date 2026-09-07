@@ -13,7 +13,7 @@ from core.print import print_error,print_info, print_warning, print_success
 from core.rss import RSS
 from driver.wxarticle import Web
 from core.wait import Wait
-from core.redfox.client import RedfoxClient
+from core.redfox import PAGE_SIZE
 import random
 
 
@@ -340,7 +340,7 @@ class WxGather:
         base_resp = {"ret": 0, "err_msg": ""}
         items: List[Dict[str, Any]] = []
         total: int = 0
-        page_size = RedfoxClient.PAGE_SIZE
+        page_size = PAGE_SIZE
         # 单次最多拉 5 页（= 100 条），防止外部传超大 limit 时把 redfox 打爆。
         max_pages = min(5, max(1, (limit + page_size - 1) // page_size))
         try:

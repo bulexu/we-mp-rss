@@ -27,8 +27,9 @@ from core.wx.base import WxGather
 class MpsWeb(WxGather):
     """基于 redfox 数据接口的公众号采集器。"""
 
-    # 红狐接口固定每页 20 条，便于后续按 MaxPage 控制翻页。
-    PAGE_SIZE = 20
+    # 红狐接口固定每页 20 条，从 core.redfox 统一引用，避免重复定义。
+    from core.redfox import PAGE_SIZE as _PAGE_SIZE  # noqa: F811
+    PAGE_SIZE = _PAGE_SIZE
 
     # ------------------------------------------------------------------
     # 正文抓取：与旧版保持一致，沿用 driver.wxarticle

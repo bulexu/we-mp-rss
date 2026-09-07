@@ -1,293 +1,268 @@
-"""Redfox 数据接口客户端
+"""Redfox 数据接口客户端(基于官方 redfox-python-sdk)
 
-对应文档：
+对应文档:
     docs/redfox/获取公众号账号信息__(广域库)-KUQYSQNX.md
     docs/redfox/获取公众号账号作品列表_(广域库)-8IQD0BJC.md
 
-提供以下能力：
-    * get_account_info(account|wxId|bizInfo)         → 公众号账号信息
-    * query_work_list(account|wxId|bizInfo, offset)  → 公众号作品列表
+本文件是对 `redfox` PyPI 包(https://pypi.org/project/redfox-python-sdk/)的薄封装,
+保留与早期自定义实现兼容的模块级 API 形态(`get_account_info` / `search_user`
+/ `query_work_list` / `iter_work_list`),以便上层 `core/wx/base.py` 与
+`core/wx/model/web.py` 不必改动一行代码。
 
-依赖：
-    * 环境变量 REDFOX_API_KEY 必须存在（也可在 config.yaml 的
-      redfox.api_key 中显式配置，但请勿硬编码）。
+依赖:
+    * 环境变量 REDFOX_API_KEY 必须存在(也可在 config.yaml 的
+      redfox.api_key 中显式配置,但请勿硬编码)。
+    * pip install redfox-python-sdk(已在 requirements.txt)。
 """
 
 from __future__ import annotations
 
-import json
 import os
-import random
 import time
 from typing import Any, Dict, Iterable, Optional
 
-import requests
+# 官方 SDK
+from redfox import RedFoxClient
+from redfox.exceptions import (
+    RedFoxAPIError,
+    RedFoxAuthError,
+    RedFoxRateLimitError,
+)
 
 from core.config import cfg
 from core.print import print_error, print_warning
 from core.redis_client import record_redfox_call
 
+# ---------------------------------------------------------------------------
+# 异常兼容:保留旧名 `RedfoxError` 以便外部引用不受影响。
+# ---------------------------------------------------------------------------
 
-class RedfoxError(RuntimeError):
-    """Redfox 接口返回非 2000 状态码时抛出。"""
-
-
-# 简单浏览器 UA，避免被目标站点直接拒掉。
-_REDFOX_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+# SDK 抛出层级:RedFoxAuthError / RedFoxRateLimitError / RedFoxAPIError。
+# 我们把 SDK 的 APIError 当作通用 RedfoxError,认证/限流错误也都视为 RedfoxError 的子类。
+RedfoxError = RedFoxAPIError
 
 
-class RedfoxClient:
-    """Redfox 数据接口薄封装。"""
+# ---------------------------------------------------------------------------
+# 模块级常量
+# ---------------------------------------------------------------------------
 
-    DEFAULT_BASE_URL = "https://redfox.hk"
-    ACCOUNT_INFO_PATH = "/story/api/gzh/data/accountInfo"
-    WORK_LIST_PATH = "/story/api/gzh/data/queryWorkList"
-    SEARCH_USER_PATH = "/story/api/gzh/data/searchUser"
-    SUCCESS_CODE = 2000
-    # searchUser / queryWorkList 单页固定 20 条
-    PAGE_SIZE = 20
+DEFAULT_BASE_URL = "https://redfox.hk"
+ACCOUNT_INFO_PATH = "/story/api/gzh/data/accountInfo"  # 广域库
+WORK_LIST_PATH = "/story/api/gzh/data/queryWorkList"   # 广域库
+SEARCH_USER_PATH = "/story/api/gzh/data/searchUser"     # 广域库
+SUCCESS_CODE = 2000
+# searchUser / queryWorkList 单页固定 20 条
+PAGE_SIZE = 20
+
+
+class _RedfoxClient:
+    """Redfox 数据接口薄封装(基于官方 SDK + 自带调用日志)。
+
+    内部类(带下划线前缀),不导出。外部只需调用模块级函数
+    (get_account_info / search_user / query_work_list / iter_work_list),
+    共享通过 ``_get_default_client()`` 取得的单例。
+
+    构造时从 config.yaml 的 `redfox.api_key` / `redfox.base_url` /
+    `redfox.timeout` 取值,缺省回落到环境变量。
+    """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
-        session: Optional[requests.Session] = None,
-    ) -> None:
-        self.api_key = (
+        timeout: Optional[int] = None,
+    ):
+        cfg_key = cfg.get("redfox.api_key", "") if cfg else ""
+        cfg_url = cfg.get("redfox.base_url", "") if cfg else ""
+        cfg_timeout = cfg.get("redfox.timeout", 15) if cfg else 15
+
+        self._api_key = (
             api_key
-            or cfg.get("redfox.api_key", "")
+            or cfg_key
             or os.getenv("REDFOX_API_KEY", "")
-            or ""
-        ).strip()
-
-        self.base_url = (
-            base_url
-            or cfg.get("redfox.base_url", "")
-            or os.getenv("REDFOX_BASE_URL", "")
-            or self.DEFAULT_BASE_URL
-        ).rstrip("/")
-
-        try:
-            self.timeout = float(
-                timeout if timeout is not None else cfg.get("redfox.timeout", 15)
-            )
-        except (TypeError, ValueError):
-            self.timeout = 15.0
-
-        self.session = session or requests.Session()
-
-    # ------------------------------------------------------------------
-    # 内部方法
-    # ------------------------------------------------------------------
-    def _headers(self) -> Dict[str, str]:
-        if not self.api_key:
-            raise RedfoxError(
-                "REDFOX_API_KEY 未配置，请在环境变量或 config.yaml 的 redfox.api_key 中设置"
-            )
-        return {
-            "REDFOX_API_KEY": self.api_key,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": _REDFOX_UA,
-        }
-
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.base_url}{path}"
-        last_error: Optional[Exception] = None
-        # 最多重试 1 次，避免瞬时网络抖动导致整个采集任务失败。
-        started_at = time.monotonic()
-        mp_id = self._extract_mp_id(payload)
-        for attempt in range(2):
-            try:
-                resp = self.session.post(
-                    url,
-                    headers=self._headers(),
-                    data=json.dumps(payload, ensure_ascii=False),
-                    timeout=(5, self.timeout),
-                )
-            except requests.RequestException as exc:
-                last_error = exc
-                print_warning(f"Redfox 请求失败（attempt={attempt + 1}）: {exc}")
-                time.sleep(random.uniform(0.5, 1.5))
-                continue
-
-            try:
-                data = resp.json()
-            except ValueError:
-                print_error(
-                    f"Redfox 返回非 JSON 响应: status={resp.status_code} body={resp.text[:300]}"
-                )
-                latency_ms = int((time.monotonic() - started_at) * 1000)
-                self._record_call(
-                    path=path,
-                    mp_id=mp_id,
-                    payload=payload,
-                    code=0,
-                    success=False,
-                    latency_ms=latency_ms,
-                    http_status=resp.status_code,
-                    error_msg="non-json response",
-                )
-                raise RedfoxError("redfox 接口返回了非 JSON 数据")
-
-            if resp.status_code >= 500:
-                last_error = RedfoxError(
-                    f"redfox 服务端错误 status={resp.status_code}"
-                )
-                print_warning(str(last_error))
-                time.sleep(random.uniform(0.5, 1.5))
-                continue
-
-            latency_ms = int((time.monotonic() - started_at) * 1000)
-            code = int(data.get("code", 0)) if isinstance(data, dict) else 0
-            success = (
-                isinstance(data, dict) and code == self.SUCCESS_CODE
-            )
-            if not success and isinstance(data, dict):
-                err_msg = (
-                    str(data.get("msg") or data.get("message") or "未知错误")
-                )[:200]
-            else:
-                err_msg = ""
-            self._record_call(
-                path=path,
-                mp_id=mp_id,
-                payload=payload,
-                code=code,
-                success=success,
-                latency_ms=latency_ms,
-                http_status=resp.status_code,
-                error_msg=err_msg,
-            )
-            return data
-
-        # 全部重试失败
-        latency_ms = int((time.monotonic() - started_at) * 1000)
-        self._record_call(
-            path=path,
-            mp_id=mp_id,
-            payload=payload,
-            code=0,
-            success=False,
-            latency_ms=latency_ms,
-            http_status=0,
-            error_msg=str(last_error)[:200] if last_error else "unknown",
         )
-        raise RedfoxError(f"redfox 请求失败: {last_error}")
+        self._base_url = (
+            base_url
+            or cfg_url
+            or os.getenv("REDFOX_BASE_URL", "")
+            or DEFAULT_BASE_URL
+        )
+        self._timeout = timeout or cfg_timeout or 15
+
+        if not self._api_key:
+            raise RedfoxError(
+                "REDFOX_API_KEY 未配置,请在环境变量或 config.yaml 的 "
+                "redfox.api_key 中设置"
+            )
+
+        # 官方 SDK 客户端(自带重试 / 退避 / 结构化异常)
+        self._sdk = RedFoxClient(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            timeout=int(self._timeout),
+        )
+
+    # ------------------------------------------------------------------
+    # 私有辅助
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _extract_mp_id(payload: Dict[str, Any]) -> str:
-        """从请求体中尽量提取一个公众号标识，用于统计维度。"""
+        """从请求参数里提取用于日志归因的公众号标识。"""
         if not isinstance(payload, dict):
             return ""
-        for key in ("bizInfo", "wxId", "account", "keyword"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+        for k in ("account", "wxId", "bizInfo", "keyword"):
+            v = payload.get(k)
+            if v:
+                return str(v)[:128]
         return ""
 
     def _record_call(
         self,
-        path: str,
-        mp_id: str,
-        payload: Dict[str, Any],
-        code: int,
+        endpoint: str,
         success: bool,
         latency_ms: int,
-        http_status: int,
-        error_msg: str,
+        mp_id: str = "",
+        request: Optional[Dict[str, Any]] = None,
+        error_msg: str = "",
+        code: int = 0,
+        http_status: int = 0,
     ) -> None:
-        """写入调用日志。失败不影响主流程。"""
+        """把每次调用写一条 Redis 统计日志,失败仅打印告警,不影响主流程。"""
         try:
-            request_summary: Dict[str, Any] = {}
-            for key in ("account", "wxId", "bizInfo", "keyword", "offset", "sortType"):
-                if key in payload and payload[key] is not None:
-                    val = payload[key]
-                    if isinstance(val, str) and len(val) > 200:
-                        val = val[:200] + "..."
-                    request_summary[key] = val
             record_redfox_call(
-                endpoint=path,
-                code=code,
+                endpoint=endpoint,
+                code=int(code or 0),
                 success=success,
-                latency_ms=latency_ms,
+                latency_ms=int(latency_ms or 0),
                 mp_id=mp_id,
-                request=request_summary,
+                request=request or {},
                 error_msg=error_msg,
-                http_status=http_status,
+                http_status=int(http_status or 0),
             )
         except Exception as exc:  # noqa: BLE001
-            # 记录失败不应影响 redfox 调用本身。
             print_warning(f"记录 redfox 调用日志失败: {exc}")
 
-    @staticmethod
-    def _ensure_payload(
-        account: Optional[str] = None,
-        wxId: Optional[str] = None,
-        bizInfo: Optional[str] = None,
-    ) -> Dict[str, Optional[str]]:
-        payload = {
-            "account": (account or "").strip() or None,
-            "wxId": (wxId or "").strip() or None,
-            "bizInfo": (bizInfo or "").strip() or None,
-        }
-        # 三个标识都为空时立即报错，避免无意义请求。
-        if not any(payload.values()):
-            raise RedfoxError(
-                "必须提供 account / wxId / bizInfo 中的至少一个标识"
+    def _sdk_call(
+        self,
+        endpoint: str,
+        request_payload: Dict[str, Any],
+        sdk_op,
+    ) -> Dict[str, Any]:
+        """统一的 SDK 调用入口:计时 + 异常归一 + 日志记录。"""
+        started = time.time()
+        mp_id = self._extract_mp_id(request_payload)
+        try:
+            data = sdk_op()
+        except RedFoxAuthError as e:
+            latency = int((time.time() - started) * 1000)
+            self._record_call(
+                endpoint=endpoint,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=f"auth: {e}",
+                code=int(getattr(e, "code", 0) or 0),
+                http_status=401,
             )
-        return payload
+            raise RedfoxError(f"Redfox 鉴权失败: {e}") from e
+        except RedFoxRateLimitError as e:
+            latency = int((time.time() - started) * 1000)
+            self._record_call(
+                endpoint=endpoint,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=f"rate_limit: {e}",
+                code=int(getattr(e, "code", 0) or 0),
+                http_status=429,
+            )
+            raise RedfoxError(f"Redfox 频率限制: {e}") from e
+        except RedFoxAPIError as e:
+            latency = int((time.time() - started) * 1000)
+            self._record_call(
+                endpoint=endpoint,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=str(e),
+                code=int(getattr(e, "code", 0) or 0),
+            )
+            raise RedfoxError(f"Redfox 业务错误: {e}") from e
+        except Exception as e:  # noqa: BLE001
+            latency = int((time.time() - started) * 1000)
+            print_error(f"Redfox 调用异常: {e}")
+            self._record_call(
+                endpoint=endpoint,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=f"exception: {e}",
+            )
+            raise RedfoxError(f"Redfox 调用异常: {e}") from e
 
-    @staticmethod
-    def _unwrap(payload: Dict[str, Any]) -> Dict[str, Any]:
-        """统一处理接口返回结构，失败时抛错。"""
-        code = payload.get("code")
-        if code != RedfoxClient.SUCCESS_CODE:
-            msg = payload.get("msg") or payload.get("message") or "未知错误"
-            raise RedfoxError(f"redfox 接口错误 code={code} msg={msg}")
-        data = payload.get("data") or {}
-        if not isinstance(data, dict):
-            raise RedfoxError("redfox 接口 data 字段格式异常")
-        return data
+        latency = int((time.time() - started) * 1000)
+        # SDK 已自动校验 code=2000 并解包 data,这里只是拿到 dict
+        data_dict = data if isinstance(data, dict) else {}
+        self._record_call(
+            endpoint=endpoint,
+            success=True,
+            latency_ms=latency,
+            mp_id=mp_id,
+            request=request_payload,
+            code=SUCCESS_CODE,
+        )
+        return data_dict
 
     # ------------------------------------------------------------------
-    # 对外方法
+    # 业务方法
     # ------------------------------------------------------------------
+
     def get_account_info(
         self,
         account: Optional[str] = None,
         wxId: Optional[str] = None,
         bizInfo: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """获取公众号账号信息。
+        """获取公众号账号信息(广域库)。
 
-        三个入参至少传入一个。优先级与 redfox 服务端一致：
+        三个入参至少传入一个。优先级与 SDK 一致:
         wxId > bizInfo > account。
         """
-        payload = self._ensure_payload(account=account, wxId=wxId, bizInfo=bizInfo)
-        resp = self._post(self.ACCOUNT_INFO_PATH, payload)
-        return self._unwrap(resp)
+        # SDK 严格要求至少传一个
+        if not any([account, wxId, bizInfo]):
+            raise RedfoxError("get_account_info: account/wxId/bizInfo 至少传一个")
+
+        return self._sdk_call(
+            endpoint=ACCOUNT_INFO_PATH,
+            request_payload={
+                "account": account or "",
+                "wxId": wxId or "",
+                "bizInfo": bizInfo or "",
+            },
+            sdk_op=lambda: self._sdk.wechat.get_account_wide(
+                account=account,
+                wx_id=wxId,
+                biz_info=bizInfo,
+            ),
+        )
 
     def search_user(
         self,
         keyword: str = "",
         offset: int = 0,
     ) -> Dict[str, Any]:
-        """按关键词模糊搜索公众号账号（广域库）。
+        """按关键词模糊搜索公众号账号(广域库)。
 
-        与 ``get_account_info`` 的「精确查找单个公众号」不同：本接口返回与
-        关键词相关的多条结果，适合订阅前的账号发现场景。
-
-        Args:
-            keyword: 搜索关键词，必填。匹配公众号名 / 描述 / 微信号等。
-            offset: 分页偏移量，从 0 开始，单页固定 20 条。
+        与 ``get_account_info`` 的「精确查找单个公众号」不同:本接口返回与
+        关键词相关的多条结果,适合订阅前的账号发现场景。
 
         Returns:
-            解包后的 ``data`` 字段，形如::
+            解包后的 ``data`` 字段,形如::
 
                 {
                     "list": [
@@ -314,9 +289,14 @@ class RedfoxClient:
             offset = max(0, int(offset))
         except (TypeError, ValueError):
             offset = 0
-        payload = {"keyword": kw, "offset": offset}
-        resp = self._post(self.SEARCH_USER_PATH, payload)
-        return self._unwrap(resp)
+
+        return self._sdk_call(
+            endpoint=SEARCH_USER_PATH,
+            request_payload={"keyword": kw, "offset": offset},
+            sdk_op=lambda: self._sdk.wechat.search_users_wide(
+                keyword=kw, offset=offset
+            ),
+        )
 
     def query_work_list(
         self,
@@ -326,17 +306,37 @@ class RedfoxClient:
         offset: int = 0,
         sortType: str = "2",
     ) -> Dict[str, Any]:
-        """获取公众号作品列表。
+        """获取公众号作品列表(广域库)。
 
         Args:
-            account/wxId/bizInfo: 公众号标识，三选一。
-            offset: 分页偏移量，每页 +20。
-            sortType: 排序方式，"0" 默认 / "2" 最新 / "4" 最热。
+            account/wxId/bizInfo: 公众号标识,三选一。
+            offset: 分页偏移量,每页 +20。
+            sortType: 排序方式,"0" 默认 / "2" 最新 / "4" 最热。
         """
-        payload = self._ensure_payload(account=account, wxId=wxId, bizInfo=bizInfo)
-        payload.update({"offset": int(offset), "sortType": str(sortType)})
-        resp = self._post(self.WORK_LIST_PATH, payload)
-        return self._unwrap(resp)
+        if not any([account, wxId, bizInfo]):
+            raise RedfoxError("query_work_list: account/wxId/bizInfo 至少传一个")
+        try:
+            offset = max(0, int(offset))
+        except (TypeError, ValueError):
+            offset = 0
+
+        return self._sdk_call(
+            endpoint=WORK_LIST_PATH,
+            request_payload={
+                "account": account or "",
+                "wxId": wxId or "",
+                "bizInfo": bizInfo or "",
+                "offset": offset,
+                "sortType": str(sortType),
+            },
+            sdk_op=lambda: self._sdk.wechat.get_user_works_wide(
+                account=account,
+                wx_id=wxId,
+                biz_info=bizInfo,
+                offset=offset,
+                sort_type=str(sortType),
+            ),
+        )
 
     def iter_work_list(
         self,
@@ -350,9 +350,9 @@ class RedfoxClient:
         """按页迭代公众号作品列表。
 
         Args:
-            max_pages: 最多拉取的页数（每页 page_size 条）。
-            page_size: 每页条数，红狐接口固定为 20，这里仅做防御性
-                校验，避免外部传错值时出现意外翻页。
+            max_pages: 最多拉取的页数(每页 page_size 条)。
+            page_size: 每页条数,红狐接口固定为 20,这里仅做防御性
+                校验,避免外部传错值时出现意外翻页。
         """
         if page_size <= 0:
             page_size = 20
@@ -367,24 +367,20 @@ class RedfoxClient:
             items = data.get("list") or []
             if not items:
                 return
-            for item in items:
-                yield item
-            total = int(data.get("total") or 0)
-            # 已读完所有数据，提前退出。
-            if (page + 1) * page_size >= total:
-                return
+            yield from items
 
 
 # ---------------------------------------------------------------------------
-# 模块级便捷函数（避免到处实例化客户端）
+# 模块级便捷函数(保留旧用法,避免改动调用方)
 # ---------------------------------------------------------------------------
-_default_client: Optional[RedfoxClient] = None
+
+_default_client: Optional["_RedfoxClient"] = None
 
 
-def _get_default_client() -> RedfoxClient:
+def _get_default_client() -> _RedfoxClient:
     global _default_client
     if _default_client is None:
-        _default_client = RedfoxClient()
+        _default_client = _RedfoxClient()
     return _default_client
 
 
@@ -399,7 +395,6 @@ def get_account_info(
 
 
 def search_user(keyword: str = "", offset: int = 0) -> Dict[str, Any]:
-    """``RedfoxClient.search_user`` 的便捷封装。"""
     return _get_default_client().search_user(keyword=keyword, offset=offset)
 
 
@@ -413,3 +408,38 @@ def query_work_list(
     return _get_default_client().query_work_list(
         account=account, wxId=wxId, bizInfo=bizInfo, offset=offset, sortType=sortType
     )
+
+
+def iter_work_list(
+    account: Optional[str] = None,
+    wxId: Optional[str] = None,
+    bizInfo: Optional[str] = None,
+    max_pages: int = 1,
+    sortType: str = "2",
+    page_size: int = 20,
+) -> Iterable[Dict[str, Any]]:
+    """模块级便捷函数:按页迭代作品列表。"""
+    return _get_default_client().iter_work_list(
+        account=account,
+        wxId=wxId,
+        bizInfo=bizInfo,
+        max_pages=max_pages,
+        sortType=sortType,
+        page_size=page_size,
+    )
+
+
+__all__ = [
+    "RedfoxError",
+    "get_account_info",
+    "search_user",
+    "query_work_list",
+    "iter_work_list",
+    # 模块级常量
+    "DEFAULT_BASE_URL",
+    "ACCOUNT_INFO_PATH",
+    "WORK_LIST_PATH",
+    "SEARCH_USER_PATH",
+    "SUCCESS_CODE",
+    "PAGE_SIZE",
+]

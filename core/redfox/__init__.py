@@ -1,8 +1,10 @@
-"""Redfox 数据接口封装
+"""Redfox 数据接口封装（基于官方 redfox-python-sdk）
 
-本目录封装了 redfox.hk 提供的新媒体数据接口，用以替代原项目对
-微信公众号公众平台 (mp.weixin.qq.com) 扫码授权 + cgi-bin/* 内部接口的
-依赖。公众号正文仍由 `driver.wxarticle` 提供，本模块只负责账号信息与
+本目录是对 PyPI `redfox-python-sdk` 的薄封装，保留与早期自定义实现
+兼容的模块级 API（`get_account_info` / `search_user` / `query_work_list` /
+`iter_work_list`），以便上层调用方无感知切换。
+
+公众号正文仍由 `driver.wxarticle` 提供，本模块只负责账号信息与
 作品列表的拉取。
 
 使用示例::
@@ -15,17 +17,31 @@
 """
 
 from .client import (
-    RedfoxClient,
+    ACCOUNT_INFO_PATH,
+    DEFAULT_BASE_URL,
+    PAGE_SIZE,
+    SEARCH_USER_PATH,
+    SUCCESS_CODE,
+    WORK_LIST_PATH,
     RedfoxError,
     get_account_info,
+    iter_work_list,
     query_work_list,
     search_user,
 )
 
 __all__ = [
-    "RedfoxClient",
+    # 模块级常量
+    "DEFAULT_BASE_URL",
+    "ACCOUNT_INFO_PATH",
+    "WORK_LIST_PATH",
+    "SEARCH_USER_PATH",
+    "SUCCESS_CODE",
+    "PAGE_SIZE",
+    # 函数
     "RedfoxError",
     "get_account_info",
+    "iter_work_list",
     "query_work_list",
     "search_user",
 ]
