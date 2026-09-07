@@ -18,12 +18,14 @@
 
 from .client import (
     ACCOUNT_INFO_PATH,
+    ARTICLE_CONTENT_PATH,
     DEFAULT_BASE_URL,
     PAGE_SIZE,
     SEARCH_USER_PATH,
     SUCCESS_CODE,
     WORK_LIST_PATH,
     RedfoxError,
+    fetch_article_content,
     get_account_info,
     iter_work_list,
     query_work_list,
@@ -36,10 +38,12 @@ __all__ = [
     "ACCOUNT_INFO_PATH",
     "WORK_LIST_PATH",
     "SEARCH_USER_PATH",
+    "ARTICLE_CONTENT_PATH",
     "SUCCESS_CODE",
     "PAGE_SIZE",
     # 函数
     "RedfoxError",
+    "fetch_article_content",
     "get_account_info",
     "iter_work_list",
     "query_work_list",

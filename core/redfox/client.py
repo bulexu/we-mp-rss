@@ -50,6 +50,7 @@ DEFAULT_BASE_URL = "https://redfox.hk"
 ACCOUNT_INFO_PATH = "/story/api/gzh/data/accountInfo"  # 广域库
 WORK_LIST_PATH = "/story/api/gzh/data/queryWorkList"   # 广域库
 SEARCH_USER_PATH = "/story/api/gzh/data/searchUser"     # 广域库
+ARTICLE_CONTENT_PATH = "/story/api/gzh/ability/temp/article/content"  # 实时拉取文章正文
 SUCCESS_CODE = 2000
 # searchUser / queryWorkList 单页固定 20 条
 PAGE_SIZE = 20
@@ -369,6 +370,99 @@ class _RedfoxClient:
                 return
             yield from items
 
+    def fetch_article_content(self, article_url: str) -> str:
+        """通过红狐实时接口拉取公众号文章正文。
+
+        对应端点: ``POST /story/api/gzh/ability/temp/article/content``
+        请求体:   ``{"articleUrl": "<mp.weixin.qq.com/s/...>"}``
+
+        注意:
+          * 该端点不在 SDK 已封装的 ``wechat`` 端点中。
+          * 响应 ``code=200`` 而非 SDK 默认校验的 ``code=2000``,
+            因此 SDK 会把它当业务错误抛出。本方法捕获 ``RedFoxAPIError``,
+            并对 ``exc.response.code == 200`` 这种特例按成功处理,
+            不修改 SDK 本身(SDK 是三方包,改它风险大)。
+          * 仍然走 SDK 的 ``post()`` -> ``request()`` 链路,享受
+            自动鉴权头 / 超时 / 5xx & 429 指数退避重试。
+
+        Returns:
+            文章正文(已 strip)。失败抛出 ``RedfoxError``。
+        """
+        if not article_url:
+            raise RedfoxError("article_url 不能为空")
+        url = str(article_url).strip()
+        if not url:
+            raise RedfoxError("article_url 不能为空")
+        request_payload = {"articleUrl": url}
+
+        started = time.time()
+        mp_id = url[:128]  # 用于日志归因(短前缀避免 Redis 体积过大)
+
+        try:
+            # 正常情况:SDK 已解包 data(响应 code=2000 时走这里)
+            data = self._sdk.post(ARTICLE_CONTENT_PATH, request_payload)
+            content = (data.get("articleContent", "") or "") if isinstance(data, dict) else ""
+        except RedFoxAuthError as exc:
+            latency = int((time.time() - started) * 1000)
+            self._record_call(
+                endpoint=ARTICLE_CONTENT_PATH,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=f"auth: {exc}",
+                code=401,
+                http_status=401,
+            )
+            raise RedfoxError(f"Redfox 鉴权失败: {exc}") from exc
+        except RedFoxRateLimitError as exc:
+            latency = int((time.time() - started) * 1000)
+            self._record_call(
+                endpoint=ARTICLE_CONTENT_PATH,
+                success=False,
+                latency_ms=latency,
+                mp_id=mp_id,
+                request=request_payload,
+                error_msg=f"rate_limit: {exc}",
+                code=429,
+                http_status=429,
+            )
+            raise RedfoxError(f"Redfox 频率限制: {exc}") from exc
+        except RedFoxAPIError as exc:
+            # 特例:本端点响应 code=200,SDK 当成业务错误抛出,但
+            # exc.response 里有完整 payload,这里手动解出当成功处理。
+            response_payload = getattr(exc, "response", None) or {}
+            if isinstance(response_payload, dict) and response_payload.get("code") == 200:
+                data = response_payload.get("data") or {}
+                content = (
+                    (data.get("articleContent", "") or "")
+                    if isinstance(data, dict)
+                    else ""
+                )
+            else:
+                latency = int((time.time() - started) * 1000)
+                self._record_call(
+                    endpoint=ARTICLE_CONTENT_PATH,
+                    success=False,
+                    latency_ms=latency,
+                    mp_id=mp_id,
+                    request=request_payload,
+                    error_msg=str(exc),
+                    code=int(getattr(exc, "code", 0) or 0),
+                )
+                raise RedfoxError(f"Redfox 业务错误: {exc}") from exc
+
+        latency = int((time.time() - started) * 1000)
+        self._record_call(
+            endpoint=ARTICLE_CONTENT_PATH,
+            success=True,
+            latency_ms=latency,
+            mp_id=mp_id,
+            request=request_payload,
+            code=200,
+        )
+        return content.strip()
+
 
 # ---------------------------------------------------------------------------
 # 模块级便捷函数(保留旧用法,避免改动调用方)
@@ -429,17 +523,27 @@ def iter_work_list(
     )
 
 
+def fetch_article_content(article_url: str) -> str:
+    """模块级便捷函数:实时拉取公众号文章正文(走 redfox SDK)。
+
+    对应端点: ``POST /story/api/gzh/ability/temp/article/content``
+    """
+    return _get_default_client().fetch_article_content(article_url)
+
+
 __all__ = [
     "RedfoxError",
     "get_account_info",
     "search_user",
     "query_work_list",
     "iter_work_list",
+    "fetch_article_content",
     # 模块级常量
     "DEFAULT_BASE_URL",
     "ACCOUNT_INFO_PATH",
     "WORK_LIST_PATH",
     "SEARCH_USER_PATH",
+    "ARTICLE_CONTENT_PATH",
     "SUCCESS_CODE",
     "PAGE_SIZE",
 ]

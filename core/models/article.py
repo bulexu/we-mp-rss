@@ -39,6 +39,7 @@ class ArticleBase(Base):
     is_read = Column(Integer, default=0)  # 是否已读
     is_favorite = Column(Integer, default=0)  # 是否收藏
     fix_fail_count = Column(Integer, default=0)  # 修正内容失败次数
+    web_fetch_fail_count = Column(Integer, default=0)  # web 抓取失败次数（>=3 时降级走 redfox）
     has_content = Column(Integer, default=0, index=True)  # 是否有正文内容（0=无，1=有），用于加速查询
 class Article(ArticleBase):
     content = Column(Text)
@@ -82,5 +83,6 @@ class Article(ArticleBase):
             'is_read': self.is_read,
             'is_favorite': self.is_favorite,
             'fix_fail_count': self.fix_fail_count,
+            'web_fetch_fail_count': self.web_fetch_fail_count,
             'has_content': self.has_content
         }
