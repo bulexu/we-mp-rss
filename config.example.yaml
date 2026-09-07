@@ -22,6 +22,8 @@ server:
    article_stats_refresh_enabled: ${ARTICLE_STATS_REFRESH_ENABLED:-False}
    # 文章统计刷新间隔 默认300秒
    article_stats_refresh_interval: ${ARTICLE_STATS_REFRESH_INTERVAL:-3600}
+   # 推荐 2~5;redfox 是付费 API,过大会触发限流;设为 1 即恢复串行
+   max_workers: ${QUEUE_MAX_WORKERS:-3}
 
 #数据库连接 例如db:  mysql+pymysql://<username>:<password>@<host>/we-rss?charset=utf8mb4
 #PostgreSQL 连接示例: postgresql://<username>:<password>@<host>/<database>
