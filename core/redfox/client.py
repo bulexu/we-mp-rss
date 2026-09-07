@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any, Dict, Iterable, Optional
 
@@ -467,15 +468,53 @@ class _RedfoxClient:
 # ---------------------------------------------------------------------------
 # 模块级便捷函数(保留旧用法,避免改动调用方)
 # ---------------------------------------------------------------------------
+#
+# 为什么是线程局部池而不是模块级单例:
+#   ``redfox.RedFoxClient`` 内部持有 ``httpx.Client``,而 ``httpx.Client``
+#   不是线程安全的(官方文档明示)。当 ``TaskQueue`` 后台线程把一次
+#   MessageTask 的多个 feed 用 ``ThreadPoolExecutor`` 并发跑时,如果共用
+#   一个 ``_RedfoxClient``,多个线程会同时调用 ``self._client.request``,
+#   轻则请求/响应错乱,重则抛 ``RuntimeError`` / 数据损坏。
+#
+# 解决方案:按 ``threading.get_ident()`` 缓存客户端,每个工作线程持有
+# 独立的 ``httpx.Client``,互不干扰。
+# ---------------------------------------------------------------------------
 
-_default_client: Optional["_RedfoxClient"] = None
+_local_clients: dict[int, "_RedfoxClient"] = {}
+_clients_lock = threading.Lock()
 
 
 def _get_default_client() -> _RedfoxClient:
-    global _default_client
-    if _default_client is None:
-        _default_client = _RedfoxClient()
-    return _default_client
+    """按线程懒初始化并缓存 ``_RedfoxClient``。
+
+    同一线程内多次调用只初始化一次;不同线程各自持有独立实例。
+    """
+    tid = threading.get_ident()
+    client = _local_clients.get(tid)
+    if client is not None:
+        return client
+    with _clients_lock:
+        # 双重检查:可能在上锁过程中其它线程已为本 tid 创建
+        client = _local_clients.get(tid)
+        if client is None:
+            client = _RedfoxClient()
+            _local_clients[tid] = client
+    return client
+
+
+def close_all_clients() -> None:
+    """关闭并清空所有缓存的客户端(主要用于优雅退出 / 测试)。
+
+    会调用每个客户端底层 ``httpx.Client.close()`` 释放连接池。
+    """
+    with _clients_lock:
+        clients = list(_local_clients.values())
+        _local_clients.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception as exc:  # noqa: BLE001
+            print_warning(f"关闭 redfox 客户端失败: {exc}")
 
 
 def get_account_info(
@@ -538,6 +577,7 @@ __all__ = [
     "query_work_list",
     "iter_work_list",
     "fetch_article_content",
+    "close_all_clients",
     # 模块级常量
     "DEFAULT_BASE_URL",
     "ACCOUNT_INFO_PATH",

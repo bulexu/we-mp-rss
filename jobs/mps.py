@@ -98,8 +98,8 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
             
             # 级联节点：上报任务执行结果到父节点
             from jobs.cascade_sync import cascade_sync_service
+            from core.loop import submit_async
             if not isTest and mock_articles:
-                import asyncio
                 try:
                     result_data = [{
                         "mp_id": mp.id,
@@ -108,8 +108,8 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
                         "success_count": count if not isTest else 1,
                         "timestamp": datetime.now().isoformat()
                     }]
-                    # 异步上报，不阻塞主流程
-                    asyncio.create_task(cascade_sync_service.report_task_result(task.id, result_data))
+                    # 通过主事件循环跨线程上报,不阻塞当前 worker 线程
+                    submit_async(cascade_sync_service.report_task_result(task.id, result_data))
                 except Exception as e:
                     print_error(f"上报任务结果失败: {str(e)}")
                     
@@ -207,27 +207,93 @@ class MessageTaskTracker:
 tracker = MessageTaskTracker()
 import threading
 
-def add_job(feeds:list[Feed]=None,task:MessageTask=None,isTest=False):
+# 并发采集上限,从配置读取。redfox 是付费 API,过大会触发限流;
+# 设为 1 即恢复串行,作为安全回退点。
+max_workers = int(cfg.get("queue.max_workers", 3))
+
+
+def _run_batch(feeds, task, isTest, max_workers):
+    """并发执行一批 feed 的采集。
+
+    由 ``TaskQueue`` 作为单条任务调度,内部用 ``ThreadPoolExecutor`` 把
+    每个 feed 派发到独立线程;``do_job`` 内部已捕获 fetcher / webhook
+    异常并通过 ``tracker`` 记录结果,这里只在出现未预期异常时打印告警,
+    不抛出 —— 避免 TaskQueue 整体重试造成已成功的公众号重复采集。
+
+    Args:
+        feeds: 待采集 feed 列表(可能为空)。
+        task: 关联的 ``MessageTask``,``None`` 表示临时批量入队(如添加公众号
+              时的首次采集)。
+        isTest: 测试模式——仍只跑 1 个 feed 以快速验证。
+        max_workers: 并发线程数上限;测试模式强制改写为 1。
+    """
+    if not feeds:
+        return
+
+    target = feeds
+    effective_workers = max(1, int(max_workers or 1))
+    if isTest:
+        target = feeds[:1]
+        effective_workers = 1
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(
+        max_workers=effective_workers,
+        thread_name_prefix="fe-fetch",
+    ) as executor:
+        futures = {
+            executor.submit(do_job, feed, task, isTest): feed
+            for feed in target
+        }
+        for fut in as_completed(futures):
+            feed = futures[fut]
+            try:
+                fut.result()
+            except Exception as exc:  # noqa: BLE001
+                print_error(
+                    f"并发采集未捕获异常 [{feed.mp_name}]: {exc}"
+                )
+
+
+def add_job(feeds: list[Feed] = None, task: MessageTask = None, isTest=False):
+    """把整批 feed 作为单个 TaskQueue 任务入队,由 ``_run_batch`` 内部并发执行。
+
+    之前是逐个 feed 入队(每个 feed 一条 TaskQueue 任务),导致 TaskQueue
+    的 in-flight 状态被大量细粒度任务填满,且无法利用 redfox HTTP IO
+    等待空隙做并行。改造后:一次 MessageTask 触发的整批采集 = 1 条
+    TaskQueue 任务,内部由线程池并行处理。
+    """
     if isTest:
         TaskQueue.clear_queue()
 
-    # 动态获取公众号列表：如果 feeds 为 None 且 task 不为 None，则动态获取
+    # 动态获取公众号列表:如果 feeds 为 None 且 task 不为 None,则动态获取
     if feeds is None and task is not None:
         feeds = get_feeds(task)
 
-    # 初始化任务追踪
+    # 初始化任务追踪(按整批的 feed 数)
     if task and not isTest and feeds:
         tracker.start_task(task.id, len(feeds))
 
-    for feed in feeds:
-        # 使用公众号名称作为任务显示名称
-        TaskQueue.add_task(do_job, feed, task, isTest, task_name=feed.mp_name)
-        if isTest:
-            print(f"测试任务，{feed.mp_name}，加入队列成功")
-            break
-        print(f"{feed.mp_name}，加入队列成功")
+    if not feeds:
+        print_success(TaskQueue.get_queue_info())
+        return
+
+    # 任务显示名称(用于 TaskQueue 前端 / 日志)
+    name = task.name if task else "batch"
+    prefix = "[测试]" if isTest else ""
+    task_label = f"{prefix}{name}({len(feeds)} feeds)"
+
+    TaskQueue.add_task(
+        _run_batch,
+        list(feeds),
+        task,
+        isTest,
+        max_workers,
+        task_name=task_label,
+    )
+    print(f"{task_label},加入队列成功(并发上限 {max_workers})")
     print_success(TaskQueue.get_queue_info())
-    pass
 import json
 def get_feeds(task:MessageTask=None):
      mps = json.loads(task.mps_id)

@@ -25,6 +25,7 @@ from .client import (
     SUCCESS_CODE,
     WORK_LIST_PATH,
     RedfoxError,
+    close_all_clients,
     fetch_article_content,
     get_account_info,
     iter_work_list,
@@ -48,4 +49,5 @@ __all__ = [
     "iter_work_list",
     "query_work_list",
     "search_user",
+    "close_all_clients",
 ]

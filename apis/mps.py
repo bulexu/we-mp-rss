@@ -492,10 +492,16 @@ async def add_mp(
         feed = existing_feed if existing_feed else new_feed
          #在这里实现第一次添加获取公众号文章
         if not existing_feed:
-            from core.queue import TaskQueue
-            from core.wx import WxGather
-            Max_page=int(cfg.get("max_page","2"))
-            TaskQueue.add_task(WxGather().Model().get_Articles, faker_id=feed.faker_id, Mps_id=feed.id, CallBack=UpdateArticle, MaxPage=Max_page, Mps_title=mp_name, task_name=mp_name)
+            # 首次采集走统一入口,享受并发(单 feed 也走同一路径,语义一致)
+            from jobs.mps import _run_batch, max_workers as _batch_max_workers
+            TaskQueue.add_task(
+                _run_batch,
+                [feed],
+                task=None,
+                isTest=False,
+                max_workers=_batch_max_workers,
+                task_name=f"首次采集:{mp_name}",
+            )
             
         return success_response({
             "id": feed.id,

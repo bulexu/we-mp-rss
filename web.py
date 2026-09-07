@@ -1,5 +1,6 @@
 import sys
 import asyncio
+from contextlib import asynccontextmanager
 
 # Windows 需要使用 ProactorEventLoop 以支持 Playwright 子进程
 # 必须在任何事件循环创建之前设置
@@ -50,6 +51,22 @@ class AKMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+
+@asynccontextmanager
+async def _capture_main_loop(_app: FastAPI):
+    """FastAPI lifespan hook:保存主事件循环引用,供后台线程跨线程调度异步任务。
+
+    采集后台线程(TaskQueue worker)运行在独立线程里,需要把级联同步等
+    协程提交到本 loop,这里就是它能拿到 loop 句柄的入口。
+    """
+    from core.loop import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+    try:
+        yield
+    finally:
+        # 应用关闭时注销,避免热重启场景下 loop 失效引用残留
+        set_main_loop(None)
+
 app = FastAPI(
     title="WeRSS API",
     description="微信公众号RSS生成服务API文档",
@@ -67,7 +84,8 @@ app = FastAPI(
     swagger_ui_parameters={
         "persistAuthorization": True,
         "withCredentials": True,
-    }
+    },
+    lifespan=_capture_main_loop,
 )
 
 # CORS配置
