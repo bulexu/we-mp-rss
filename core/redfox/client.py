@@ -20,7 +20,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Dict, Iterable, Optional
+from html import escape as html_escape
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # 官方 SDK
 from redfox import RedFoxClient
@@ -55,6 +56,70 @@ ARTICLE_CONTENT_PATH = "/story/api/gzh/ability/temp/article/content"  # 实时�
 SUCCESS_CODE = 2000
 # searchUser / queryWorkList 单页固定 20 条
 PAGE_SIZE = 20
+
+
+# ---------------------------------------------------------------------------
+# 文章正文响应解析工具
+# ---------------------------------------------------------------------------
+#
+# Redfox 实时正文端点 ``ARTICLE_CONTENT_PATH`` 返回的 data 形如::
+#
+#     {
+#         "articleContent": "<p>...</p>",   # HTML 字符串,可能不含图片
+#         "imageUrls": [                       # 补充的图片 URL 列表
+#             "https://mmbiz.qpic.cn/...?wx_fmt=png&from=appmsg",
+#             ...
+#         ]
+#     }
+#
+# 这两个字段是互补的: ``articleContent`` 给出排版后的正文 HTML,
+# ``imageUrls`` 给出该篇文章的原图列表 (正文中未必能直接引用到)。
+# 为保证图片不被丢失,本模块统一在返回前把 ``imageUrls`` 拼成
+# ``<img>`` 标签追加到 ``articleContent`` 末尾。
+# ---------------------------------------------------------------------------
+
+
+def _extract_article_payload(data: Any) -> Tuple[str, List[str]]:
+    """从 Redfox 响应 data 中解出 ``(articleContent, imageUrls)``。
+
+    容错:任一字段缺失 / 类型不符都返回空值,而不是抛异常。
+    过滤掉 ``imageUrls`` 中的非字符串与空字符串元素。
+    """
+    if not isinstance(data, dict):
+        return "", []
+
+    content = data.get("articleContent", "") or ""
+    if not isinstance(content, str):
+        content = ""
+
+    raw_urls = data.get("imageUrls", []) or []
+    if not isinstance(raw_urls, list):
+        return content, []
+
+    image_urls: List[str] = []
+    for item in raw_urls:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                image_urls.append(stripped)
+    return content, image_urls
+
+
+def _append_image_urls(content: str, image_urls: List[str]) -> str:
+    """把 ``imageUrls`` 拼成 ``<img>`` 标签追加到正文末尾。
+
+    每个 URL 一行,自闭合标签;URL 经 ``html.escape`` 防注入。
+    原 content 没有换行结尾时补一个换行,保证 ``<img>`` 不会粘在
+    最后一个 HTML 元素后面影响渲染。
+    """
+    if not image_urls:
+        return content
+
+    img_tags = "\n".join(
+        f'<img src="{html_escape(url, quote=True)}" />' for url in image_urls
+    )
+    sep = "" if content.endswith("\n") else "\n"
+    return f"{content}{sep}{img_tags}"
 
 
 class _RedfoxClient:
@@ -385,9 +450,13 @@ class _RedfoxClient:
             不修改 SDK 本身(SDK 是三方包,改它风险大)。
           * 仍然走 SDK 的 ``post()`` -> ``request()`` 链路,享受
             自动鉴权头 / 超时 / 5xx & 429 指数退避重试。
+          * 响应 data 同时含 ``articleContent`` (正文 HTML) 和
+            ``imageUrls`` (补充原图列表),本方法会把后者拼成
+            ``<img>`` 标签追加到正文末尾,避免图片丢失。
 
         Returns:
-            文章正文(已 strip)。失败抛出 ``RedfoxError``。
+            文章正文 HTML (已 strip; ``imageUrls`` 已合并为 ``<img>``)。
+            失败抛出 ``RedfoxError``。
         """
         if not article_url:
             raise RedfoxError("article_url 不能为空")
@@ -402,7 +471,6 @@ class _RedfoxClient:
         try:
             # 正常情况:SDK 已解包 data(响应 code=2000 时走这里)
             data = self._sdk.post(ARTICLE_CONTENT_PATH, request_payload)
-            content = (data.get("articleContent", "") or "") if isinstance(data, dict) else ""
         except RedFoxAuthError as exc:
             latency = int((time.time() - started) * 1000)
             self._record_call(
@@ -435,11 +503,6 @@ class _RedfoxClient:
             response_payload = getattr(exc, "response", None) or {}
             if isinstance(response_payload, dict) and response_payload.get("code") == 200:
                 data = response_payload.get("data") or {}
-                content = (
-                    (data.get("articleContent", "") or "")
-                    if isinstance(data, dict)
-                    else ""
-                )
             else:
                 latency = int((time.time() - started) * 1000)
                 self._record_call(
@@ -452,6 +515,11 @@ class _RedfoxClient:
                     code=int(getattr(exc, "code", 0) or 0),
                 )
                 raise RedfoxError(f"Redfox 业务错误: {exc}") from exc
+
+        # articleContent + imageUrls 合并:解析两个字段,把图片拼成 <img>
+        # 标签追加到正文末尾(详情见模块级 _extract_article_payload / _append_image_urls)。
+        content, image_urls = _extract_article_payload(data)
+        content = _append_image_urls(content, image_urls)
 
         latency = int((time.time() - started) * 1000)
         self._record_call(

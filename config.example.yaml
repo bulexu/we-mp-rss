@@ -134,10 +134,13 @@ gather:
   content_auto_interval: ${GATHER.CONTENT_AUTO_INTERVAL:-59}
   #内容修正模式，默认web 允许值 web、api
   content_mode: ${GATHER.CONTENT_MODE:-web}
-  #是否清理html标签 默认True 
+  #是否清理html标签 默认True
   clean_html: ${GATHER.CLEAN_HTML:-False}
   #浏览器类型 默认firefox 允许值 firefox/edge/webkit
   browser_type: ${BROWSER_TYPE:-firefox}
+  # Playwright 抓取全部失败后是否降级到 Redfox SDK
+  # 默认 True;关闭后 Tier 2 (redfox) 跳过,直接返回失败
+  content_redfox_fallback: ${GATHER.CONTENT_REDFOX_FALLBACK:-True}
 
 # Redfox 数据接口配置（用于替代公众号平台扫码授权）
 # API 密钥从 https://redfox.hk/settings/api-keys 获取

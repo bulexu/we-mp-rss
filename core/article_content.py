@@ -80,6 +80,8 @@ def fetch_article_content(
         每次失败做线性退避再重试,容忍偶发的网络/反爬抖动。
       * Tier 2: web 重试仍空时,降级走 redfox SDK 实时接口。
         这是当前唯一与 Playwright 无关的通道,可绕过微信反爬。
+        当 ``gather.content_redfox_fallback=False`` 时此层跳过,
+        直接返回 web 模式失败 (用于不想消耗 redfox 额度的场景)。
 
     旧版曾有 Tier 3 提前切 redfox 的逻辑 (依赖 ``web_fetch_fail_count``
     历史计数),但实测 Playwright 失败原因与计数相关性弱,
@@ -126,7 +128,16 @@ def fetch_article_content(
         if attempt < WEB_RETRY_TIMES:
             time.sleep(_WEB_RETRY_BACKOFF * attempt)
 
-    # Tier 1 全部失败,降级 redfox
+    # Tier 1 全部失败;是否降级 redfox 由配置项 ``gather.content_redfox_fallback``
+    # 控制 (默认 True)。关闭时直接返回 web 模式失败,不消耗 redfox 额度。
+    if not cfg.get("gather.content_redfox_fallback", True):
+        print_warning(
+            f"web 重试 {WEB_RETRY_TIMES} 次均失败,且 "
+            f"gather.content_redfox_fallback=False,放弃: {url}"
+        )
+        return "", "web", web_failed
+
+    # 降级 redfox
     print_warning(
         f"web 重试 {WEB_RETRY_TIMES} 次均失败,降级 redfox: {url}"
     )
@@ -165,7 +176,8 @@ def sync_article_content(
         return False, "missing_url"
 
     # 读取历史 web 失败次数;现在仅用于失败时累加计数,
-    # 不再决定本次是否走 redfox 兜底 (fetch_article_content 内固定走 web→redfox)。
+    # 是否走 redfox 兜底完全由 ``fetch_article_content`` 内
+    # ``gather.content_redfox_fallback`` 配置决定。
     web_fail_count = int(getattr(article, "web_fetch_fail_count", 0) or 0)
     content, mode, web_failed_this_call = fetch_article_content(
         article_url, preferred_mode, web_fail_count
