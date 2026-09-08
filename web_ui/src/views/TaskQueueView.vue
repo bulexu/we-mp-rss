@@ -441,13 +441,13 @@ const getStatusColor = (status: string) => {
   }
 }
 
-// 子任务状态颜色(running 单独给绿色脉冲,completed 蓝色,failed 红色)
+// 子任务状态颜色(running 蓝色脉冲,completed 绿色,failed 红色)
 const getSubtaskColor = (status: string) => {
   switch (status) {
     case 'running':
-      return 'green'
+      return 'blue'
     case 'completed':
-      return 'arcoblue'
+      return 'green'
     case 'failed':
       return 'red'
     default:
@@ -819,13 +819,13 @@ onUnmounted(() => {
 }
 
 .subtasks-stats .stat-running {
-  color: #00b42a;
-  background: rgba(0, 180, 42, 0.08);
+  color: #165dff;
+  background: rgba(22, 93, 255, 0.08);
 }
 
 .subtasks-stats .stat-completed {
-  color: #165dff;
-  background: rgba(22, 93, 255, 0.08);
+  color: #00b42a;
+  background: rgba(0, 180, 42, 0.08);
 }
 
 .subtasks-stats .stat-failed {

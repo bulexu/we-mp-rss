@@ -34,7 +34,7 @@ def test(info:str):
 from core.models.message_task import MessageTask
 # from core.queue import TaskQueue
 from .webhook import web_hook
-interval=int(cfg.get("interval",60)) # 每隔多少秒执行一次
+interval=int(cfg.get("interval",60)) # 兼容历史配置;get_Articles 已不再读取
 def do_job(mp=None,task:MessageTask=None,isTest=False):
         """执行单个公众号的采集任务"""
         # TaskQueue.add_task(test,info=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -66,7 +66,7 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
             else:
                 wx=WxGather().Model()
                 try:
-                    wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name, MaxPage=1,Over_CallBack=Update_Over,interval=interval)
+                    wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name, MaxPage=1,Over_CallBack=Update_Over)
                     success = True
                 except Exception as e:
                     print_error(f"获取文章失败 [{mp.mp_name}]: {e}")
@@ -119,12 +119,15 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
             raise  # 重新抛出，让队列的重试机制处理
         
         finally:
-            # 记录执行结果到追踪器
+            # 记录执行结果到追踪器。
+            # 注意:执行无异常但抓到 0 条数据(账号近期未更新)不算失败。
+            # 只有 fetcher / webhook 真正抛异常才算 failed,与上方
+            # ``print_success(f"任务(...)执行成功,{count}成功条数")`` 保持一致。
             if task and not isTest:
                 tracker.record_mp_result(
                     task_id=task.id,
                     mp_name=mp.mp_name,
-                    success=success and count > 0,
+                    success=success,
                     article_count=count,
                     error=error_msg
                 )

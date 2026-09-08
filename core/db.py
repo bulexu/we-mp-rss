@@ -201,7 +201,74 @@ class Db:
             else:
                 print_error(f"Failed to add article: {e}")
             return False
-        return True    
+        return True
+
+    def update_article_content(self, article_id: str, content: str) -> bool:
+        """只更新文章正文相关字段,供 PlaywrightPool 后台回写。
+
+        与 ``add_article`` 走 ``session.merge`` 不同,这里直接走 SQLAlchemy
+        ``update``,避免触发 ``add_article`` 里 metadata 不变的 early-return
+        导致 content 写不进 DB。
+
+        Args:
+            article_id: 主键 ID(经过 ``add_article`` 前缀规则调整后的最终值)。
+            content: 抓到的 HTML 正文,空字符串 / ``"DELETED"`` 视为特殊值。
+
+        Returns:
+            True 表示成功写入,False 表示失败或文章不存在。
+        """
+        if not article_id:
+            return False
+        session = None
+        try:
+            session = self.get_session()
+            # 查一下文章是否存在,顺便拿到 url 用于 description 兜底
+            existing = session.query(Article).filter(Article.id == article_id).first()
+            if existing is None:
+                print_warning(f"update_article_content: article {article_id} 不存在")
+                return False
+
+            from core.models.base import DATA_STATUS
+            from tools.fix import fix_html, sanitize_utf8
+
+            updates = {}
+            if content == "DELETED":
+                updates["content"] = ""
+                updates["content_html"] = ""
+                updates["has_content"] = 0
+                updates["status"] = DATA_STATUS.DELETED
+            elif content:
+                clean = sanitize_utf8(content) or ""
+                updates["content"] = clean
+                updates["content_html"] = fix_html(clean)
+                updates["has_content"] = 1
+                # 状态恢复为 ACTIVE(若之前被误标为 DELETED)
+                if existing.status == DATA_STATUS.DELETED:
+                    updates["status"] = DATA_STATUS.ACTIVE
+
+            if not updates:
+                return True  # 空内容,不写
+
+            # 自动补 description(若原值为空)
+            if content and content != "DELETED" and not (existing.description or "").strip():
+                try:
+                    from driver.wxarticle import Web
+                    updates["description"] = Web.get_description(content)
+                except Exception:
+                    pass
+
+            session.query(Article).filter(Article.id == article_id).update(updates)
+            session.commit()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if session is not None:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+            print_error(f"update_article_content 失败 [{article_id}]: {exc}")
+            return False
+
         
     def get_articles(self, id:str=None, limit:int=30, offset:int=0) -> List[Article]: # type: ignore
         try:

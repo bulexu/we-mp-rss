@@ -41,6 +41,12 @@ class WXArticleFetcher:
         """
         获取文章内容(异步)
 
+        自 1.6 起拆分为两步:
+          - 自身起 controller 并加载页面;
+          - 调用 ``_extract_from_page`` 在已加载的 page 上做内容抽取。
+        这样 :class:`core.wx.playwright_pool.PlaywrightPool`
+        可以复用单例 controller,在后台线程事件循环里并发抓多篇。
+
         Args:
             url: 文章URL
 
@@ -57,8 +63,72 @@ class WXArticleFetcher:
             - mp_id: 公众号ID
             - fetch_error: 错误信息
         """
-        info = {
-            "id": self.extract_id_from_url(url),
+        info = self._new_info(url)
+        try:
+            # 使用异步上下文管理器
+            async with PlaywrightController(
+                proxy_url=self.browser_proxy_url,
+                mobile_mode=True
+            ) as controller:
+
+                # 打开URL
+                success = await controller.open_url(url, timeout=self.wait_timeout)
+                if not success:
+                    raise Exception("页面加载失败")
+
+                page = controller.page
+                # 等待页面加载
+                await asyncio.sleep(2)
+                return await self._extract_from_page(page, url, info)
+
+        except Exception as e:
+            info["fetch_error"] = str(e)
+            print_error(f"获取文章内容失败: {str(e)}")
+            return info
+
+    @staticmethod
+    async def get_article_content_with_controller(
+        controller: "PlaywrightController",
+        url: str,
+    ) -> Dict:
+        """复用已存在的 controller 抓一篇正文(给 PlaywrightPool 用)。
+
+        每次调用在 controller.context 上开一个新页面,抓完即关,
+        避免多篇文章共享同一 page 互相干扰。
+        """
+        info = WXArticleFetcher._new_info(url)
+        if controller is None or getattr(controller, "_context", None) is None:
+            info["fetch_error"] = "Playwright controller 未初始化"
+            return info
+        page = None
+        fetcher = WXArticleFetcher()
+        try:
+            page = await controller._context.new_page()
+            success = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            if not success:
+                info["fetch_error"] = "页面加载失败"
+                return info
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            return await fetcher._extract_from_page(page, url, info)
+        except Exception as exc:  # noqa: BLE001
+            info["fetch_error"] = str(exc)
+            print_error(f"复用 controller 抓取失败 [{url}]: {exc}")
+            return info
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @staticmethod
+    def _new_info(url: str) -> Dict:
+        return {
+            "id": WXArticleFetcher().extract_id_from_url(url),
             "title": "",
             "author": "",
             "description": "",
@@ -74,172 +144,170 @@ class WXArticleFetcher:
             "fetch_error": ""
         }
 
+    async def _extract_from_page(self, page, url: str, info: Dict) -> Dict:
+        """从已加载好的 Playwright page 抽取文章内容。
+
+        既被 :meth:`get_article_content` 调用,也被
+        :meth:`get_article_content_with_controller` 通过 ``self`` 实例间接调用。
+        """
+        # 获取页面内容
+        body = await page.content()
+        body_text = await page.locator("body").text_content()
+
+        # 检查各种异常情况
+        if "当前环境异常，完成验证后即可继续访问" in body_text:
+            info["content"] = ""
+            info["fetch_error"] = "当前环境异常，完成验证后即可继续访问"
+            return info
+
+        if "该内容已被发布者删除" in body_text or "The content has been deleted by the author." in body_text:
+            info["content"] = "DELETED"
+            info["fetch_error"] = "该内容已被发布者删除"
+            return info
+
+        if "内容审核中" in body_text:
+            info["content"] = "DELETED"
+            info["fetch_error"] = "内容审核中"
+            return info
+
+        if "该内容暂时无法查看" in body_text:
+            info["content"] = "DELETED"
+            info["fetch_error"] = "该内容暂时无法查看"
+            return info
+
+        if "违规无法查看" in body_text or "Unable to view this content because it violates regulation" in body_text:
+            info["content"] = "DELETED"
+            info["fetch_error"] = "违规无法查看"
+            return info
+
+        if "发送失败无法查看" in body_text:
+            info["content"] = "DELETED"
+            info["fetch_error"] = "发送失败无法查看"
+            return info
+
+        # 获取文章基本信息
+        title = await page.locator('meta[property="og:title"]').get_attribute("content")
+        author = await page.locator('meta[property="og:article:author"]').get_attribute("content")
+        description = await page.locator('meta[property="og:description"]').get_attribute("content")
+        topic_image = await page.locator('meta[property="twitter:image"]').get_attribute("content")
+
+        if not title:
+            title = await page.evaluate('() => document.title')
+
+        # 获取发布时间
+        publish_time = await self._extract_publish_time(page)
+
+        # 获取内容
+        content = await page.locator('#js_content').inner_html()
+        if not content:
+            content = await page.locator('#js_article').inner_html()
+
+        # 模拟滚动页面到底部，触发懒加载图片
         try:
-            # 使用异步上下文管理器
-            async with PlaywrightController(
-                proxy_url=self.browser_proxy_url,
-                mobile_mode=True
-            ) as controller:
+            await self._scroll_to_bottom_and_load_images(page)
+        except Exception as e:
+            print_warning(f"滚动加载图片失败: {e}")
 
-                # 打开URL
-                success = await controller.open_url(url, timeout=self.wait_timeout)
-                if not success:
-                    raise Exception("页面加载失败")
+        # 重新获取内容（滚动后可能有更多图片加载）
+        content = await page.locator('#js_content').inner_html()
+        if not content:
+            content = await page.locator('#js_article').inner_html()
 
-                page = controller.page
+        content = Web.clean_article_content(str(content))
+        # 更新基本信息
+        info["title"] = title or ""
+        info["author"] = author or ""
+        info["description"] = description or ""
+        info["topic_image"] = topic_image or ""
+        info["publish_time"] = publish_time
+        info["content"] = content or ""
 
-                # 等待页面加载
-                await asyncio.sleep(2)
+        # 获取公众号信息
+        try:
+            # 获取公众号头像
+            logo_src = None
+            selectors = [
+                '#js_like_profile_bar .wx_follow_avatar img',
+                '#js_like_profile_bar img.wx_follow_avatar_pic',
+                '.wx_follow_avatar img'
+            ]
 
-                # 获取页面内容
-                body = await page.content()
-                body_text = await page.locator("body").text_content()
-
-                # 检查各种异常情况
-                if "当前环境异常，完成验证后即可继续访问" in body_text:
-                    info["content"] = ""
-                    info["fetch_error"] = "当前环境异常，完成验证后即可继续访问"
-                    return info
-
-                if "该内容已被发布者删除" in body_text or "The content has been deleted by the author." in body_text:
-                    info["content"] = "DELETED"
-                    info["fetch_error"] = "该内容已被发布者删除"
-                    return info
-
-                if "内容审核中" in body_text:
-                    info["content"] = "DELETED"
-                    info["fetch_error"] = "内容审核中"
-                    return info
-
-                if "该内容暂时无法查看" in body_text:
-                    info["content"] = "DELETED"
-                    info["fetch_error"] = "该内容暂时无法查看"
-                    return info
-
-                if "违规无法查看" in body_text or "Unable to view this content because it violates regulation" in body_text:
-                    info["content"] = "DELETED"
-                    info["fetch_error"] = "违规无法查看"
-                    return info
-
-                if "发送失败无法查看" in body_text:
-                    info["content"] = "DELETED"
-                    info["fetch_error"] = "发送失败无法查看"
-                    return info
-
-                # 获取文章基本信息
-                title = await page.locator('meta[property="og:title"]').get_attribute("content")
-                author = await page.locator('meta[property="og:article:author"]').get_attribute("content")
-                description = await page.locator('meta[property="og:description"]').get_attribute("content")
-                topic_image = await page.locator('meta[property="twitter:image"]').get_attribute("content")
-
-                if not title:
-                    title = await page.evaluate('() => document.title')
-
-                # 获取发布时间
-                publish_time = await self._extract_publish_time(page)
-
-                # 获取内容
-                content = await page.locator('#js_content').inner_html()
-                if not content:
-                    content = await page.locator('#js_article').inner_html()
-
-                # 模拟滚动页面到底部，触发懒加载图片
+            for selector in selectors:
                 try:
-                    await self._scroll_to_bottom_and_load_images(page)
-                except Exception as e:
-                    print_warning(f"滚动加载图片失败: {e}")
+                    ele_logo = page.locator(selector)
+                    logo_src = await ele_logo.get_attribute('src', timeout=5000)
+                    if logo_src:
+                        print_success(f"使用选择器 {selector} 成功获取公众号头像")
+                        break
+                except Exception:
+                    continue
 
-                # 重新获取内容（滚动后可能有更多图片加载）
-                content = await page.locator('#js_content').inner_html()
-                if not content:
-                    content = await page.locator('#js_article').inner_html()
-
-                content=Web.clean_article_content(str(content))
-                # 更新基本信息
-                info["title"] = title or ""
-                info["author"] = author or ""
-                info["description"] = description or ""
-                info["topic_image"] = topic_image or ""
-                info["publish_time"] = publish_time
-                info["content"] = content or ""
-
-                # 获取公众号信息
+            if not logo_src:
                 try:
-                    # 获取公众号头像
-                    logo_src = None
-                    selectors = [
-                        '#js_like_profile_bar .wx_follow_avatar img',
-                        '#js_like_profile_bar img.wx_follow_avatar_pic',
-                        '.wx_follow_avatar img'
-                    ]
+                    logo_src = await page.locator('meta[property="og:image"]').get_attribute("content", timeout=3000)
+                except Exception:
+                    pass
 
-                    for selector in selectors:
-                        try:
-                            ele_logo = page.locator(selector)
-                            logo_src = await ele_logo.get_attribute('src', timeout=5000)
-                            if logo_src:
-                                print_success(f"使用选择器 {selector} 成功获取公众号头像")
-                                break
-                        except Exception:
-                            continue
+            # 获取公众号名称
+            mp_name = None
+            try:
+                mp_name = await page.evaluate('() => { const el = document.getElementById("js_wx_follow_nickname"); return el ? el.textContent : null; }')
+            except Exception:
+                pass
 
-                    if not logo_src:
-                        try:
-                            logo_src = await page.locator('meta[property="og:image"]').get_attribute("content", timeout=3000)
-                        except Exception:
-                            pass
+            if not mp_name:
+                try:
+                    mp_name = await page.locator('meta[property="og:article:author"]').get_attribute("content", timeout=3000)
+                except Exception:
+                    pass
 
-                    # 获取公众号名称
-                    mp_name = None
-                    try:
-                        mp_name = await page.evaluate('() => { const el = document.getElementById("js_wx_follow_nickname"); return el ? el.textContent : null; }')
-                    except Exception:
-                        pass
+            # 获取biz
+            biz = None
+            try:
+                biz = await page.evaluate('() => window.biz')
+            except Exception:
+                pass
 
-                    if not mp_name:
-                        try:
-                            mp_name = await page.locator('meta[property="og:article:author"]').get_attribute("content", timeout=3000)
-                        except Exception:
-                            pass
+            if not biz:
+                biz = self._extract_biz(url, content or "")
 
-                    # 获取biz
-                    biz = None
-                    try:
-                        biz = await page.evaluate('() => window.biz')
-                    except Exception:
-                        pass
+            info["mp_info"] = {
+                "mp_name": mp_name or "未知公众号",
+                "logo": logo_src or "",
+                "biz": biz or ""
+            }
 
-                    if not biz:
-                        biz = self._extract_biz(url, content or "")
-
-                    info["mp_info"] = {
-                        "mp_name": mp_name or "未知公众号",
-                        "logo": logo_src or "",
-                        "biz": biz or ""
-                    }
-
-                    # 生成 mp_id
-                    if biz:
-                        try:
-                            info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
-                        except Exception:
-                            info["mp_id"] = ""
-
-                except Exception as e:
-                    print_error(f"获取公众号信息失败: {str(e)}")
-                    info["mp_info"] = {
-                        "mp_name": "未知公众号",
-                        "logo": "",
-                        "biz": ""
-                    }
+            # 生成 mp_id
+            if biz:
+                try:
+                    info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
+                except Exception:
                     info["mp_id"] = ""
 
-                return info
-
         except Exception as e:
-            info["fetch_error"] = str(e)
-            print_error(f"获取文章内容失败: {str(e)}")
-            return info
+            print_error(f"获取公众号信息失败: {str(e)}")
+            info["mp_info"] = {
+                "mp_name": "未知公众号",
+                "logo": "",
+                "biz": ""
+            }
+            info["mp_id"] = ""
+
+        return info
+
+    @staticmethod
+    async def _extract_publish_time_static(page) -> int:
+        """静态包装,通过新建 fetcher 实例复用原 ``_extract_publish_time``。
+        保留以备静态调用场景使用。
+        """
+        return await WXArticleFetcher()._extract_publish_time(page)
+
+    @staticmethod
+    async def _scroll_to_bottom_and_load_images_static(page) -> None:
+        """静态包装,通过新建 fetcher 实例复用原 ``_scroll_to_bottom_and_load_images``。
+        保留以备静态调用场景使用。
+        """
+        await WXArticleFetcher()._scroll_to_bottom_and_load_images(page)
 
     async def _scroll_to_bottom_and_load_images(self, page, scroll_step: int = 500, max_scrolls: int = 50, wait_time: int = 300):
         """
