@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Tuple
 
 from core.config import cfg
 from core.models.base import DATA_STATUS
 from core.print import print_info, print_warning
 
-# web 抓取连续失败此值后,降级走 redfox 接口
-# (Article.web_fetch_fail_count >= WEB_FAIL_THRESHOLD 触发)
-WEB_FAIL_THRESHOLD = 3
+# Playwright (web 模式) 单篇文章的重试次数 (含首次)。
+# 重试此值仍空时,降级走 redfox SDK。
+WEB_RETRY_TIMES = 3
+
+# web 重试之间的退避基数 (秒),实际 sleep = _WEB_RETRY_BACKOFF * attempt。
+_WEB_RETRY_BACKOFF = 2.0
+
+# 历史兼容别名:旧版「连续失败 N 次切换兜底」的语义常量。
+# 现已与 WEB_RETRY_TIMES 同义,保留供外部 import。
+WEB_FAIL_THRESHOLD = WEB_RETRY_TIMES
 
 
 def normalize_content_mode(mode: str | None = None) -> str:
@@ -53,13 +61,6 @@ def _fetch_with_web(url: str) -> str:
     return (result.get("content") or "").strip()
 
 
-def _fetch_with_api(url: str) -> str:
-    from core.wx.model.api import MpsApi
-
-    fetcher = MpsApi()
-    return (fetcher.content_extract(url) or "").strip()
-
-
 def _fetch_with_redfox(url: str) -> str:
     """通过 redfox SDK 实时接口拉取文章正文。"""
     from core.redfox import fetch_article_content as _redfox_fetch
@@ -69,69 +70,77 @@ def _fetch_with_redfox(url: str) -> str:
 
 def fetch_article_content(
     url: str,
-    preferred_mode: str | None = None,
-    web_fail_count: int = 0,
+    preferred_mode: str | None = None,  # noqa: ARG001 历史参数,不再用于切换
+    web_fail_count: int = 0,  # noqa: ARG001 历史参数,不再用于切换
 ) -> Tuple[str, str, bool]:
     """按层级抓取公众号文章正文。
 
     抓取层级:
-      * Tier 3 (NEW): 当 ``web_fail_count >= WEB_FAIL_THRESHOLD`` 时,先走
-        redfox SDK,失败再降级 web/api。
-      * Tier 1+2: ``preferred_mode`` (默认 ``web``) + 兜底(另一个),与旧逻辑一致。
+      * Tier 1: playwright (web 模式) 重试 ``WEB_RETRY_TIMES`` 次,
+        每次失败做线性退避再重试,容忍偶发的网络/反爬抖动。
+      * Tier 2: web 重试仍空时,降级走 redfox SDK 实时接口。
+        这是当前唯一与 Playwright 无关的通道,可绕过微信反爬。
+
+    旧版曾有 Tier 3 提前切 redfox 的逻辑 (依赖 ``web_fetch_fail_count``
+    历史计数),但实测 Playwright 失败原因与计数相关性弱,
+    且计数要等 3 次才升级,前两次会浪费在已知失败的通道上。
+    故简化为「每篇文章都按 web→redfox 走到底」,不再用
+    ``web_fail_count`` 切换逻辑。``web_failed_this_call`` 仍按
+    本次是否实际尝试过 web 失败返回,供调用方累加计数用。
 
     Args:
         url: 文章 URL。
-        preferred_mode: 首选抓取模式 (``web`` / ``api``),None 取
-            ``gather.content_mode`` 配置。
-        web_fail_count: 该文章 web 抓取历史失败次数。>= ``WEB_FAIL_THRESHOLD``
-            触发 Tier 3 降级。
+        preferred_mode: 历史参数保留,当前实现只走 web → redfox。
+        web_fail_count: 历史参数保留,当前实现不再用于切换逻辑。
 
     Returns:
         ``(content, mode, web_failed_this_call)``:
           * ``content``: 正文(空字符串表示失败)。
-          * ``mode``: 实际生效的抓取模式 (``web`` / ``api`` / ``redfox``)。
+          * ``mode``: 实际生效的抓取模式 (``web`` / ``redfox``)。
           * ``web_failed_this_call``: 本次调用是否实际尝试过 web 且失败
             (用于调用方决定是否累加 ``web_fetch_fail_count``)。
     """
     web_failed = False
 
-    # Tier 3: web 连续失败达到阈值时,先走 redfox 实时接口
-    if web_fail_count >= WEB_FAIL_THRESHOLD:
+    # Tier 1: playwright 重试 WEB_RETRY_TIMES 次
+    for attempt in range(1, WEB_RETRY_TIMES + 1):
         try:
-            content = _fetch_with_redfox(url)
+            content = _fetch_with_web(url)
+        except Exception as exc:  # noqa: BLE001
+            print_warning(
+                f"fetch article content failed in web mode "
+                f"(attempt {attempt}/{WEB_RETRY_TIMES}): {exc}"
+            )
+            content = ""
+            web_failed = True
+        else:
             if content == "DELETED":
-                return content, "redfox", web_failed
+                # DELETED 是有效信号,不计入失败
+                return content, "web", web_failed
             if content:
-                return content, "redfox", web_failed
-        except Exception as exc:
-            print_warning(f"fetch article content failed in redfox mode: {exc}")
-        # redfox 没拿到,继续走下面的 web/api 兜底(也会把 web_failed 算上)
-
-    mode = normalize_content_mode(preferred_mode)
-    modes = [mode] + [item for item in ("web", "api") if item != mode]
-
-    for current_mode in modes:
-        try:
-            if current_mode == "api":
-                content = _fetch_with_api(url)
-            else:
-                content = _fetch_with_web(url)
-        except Exception as exc:
-            print_warning(f"fetch article content failed in {current_mode} mode: {exc}")
-            if current_mode == "web":
-                web_failed = True
-            continue
-
-        if content == "DELETED":
-            # DELETED 是有效信号,不计入失败
-            return content, current_mode, web_failed
-        if content:
-            return content, current_mode, web_failed
-        # 空内容 -> 视为本模式抓取失败
-        if current_mode == "web":
+                return content, "web", web_failed
+            # 空内容 → 本次 web 失败
             web_failed = True
 
-    return "", mode, web_failed
+        # 最后一次失败不再 sleep
+        if attempt < WEB_RETRY_TIMES:
+            time.sleep(_WEB_RETRY_BACKOFF * attempt)
+
+    # Tier 1 全部失败,降级 redfox
+    print_warning(
+        f"web 重试 {WEB_RETRY_TIMES} 次均失败,降级 redfox: {url}"
+    )
+    try:
+        content = _fetch_with_redfox(url)
+    except Exception as exc:  # noqa: BLE001
+        print_warning(f"fetch article content failed in redfox mode: {exc}")
+        return "", "redfox", web_failed
+
+    if content == "DELETED":
+        return content, "redfox", web_failed
+    if content:
+        return content, "redfox", web_failed
+    return "", "redfox", web_failed
 
 
 def sync_article_content(
@@ -155,7 +164,8 @@ def sync_article_content(
         print_warning(f"article {getattr(article, 'id', '')} has no valid url")
         return False, "missing_url"
 
-    # 读取历史 web 失败次数,用于决定本次是否走 redfox 兜底
+    # 读取历史 web 失败次数;现在仅用于失败时累加计数,
+    # 不再决定本次是否走 redfox 兜底 (fetch_article_content 内固定走 web→redfox)。
     web_fail_count = int(getattr(article, "web_fetch_fail_count", 0) or 0)
     content, mode, web_failed_this_call = fetch_article_content(
         article_url, preferred_mode, web_fail_count
