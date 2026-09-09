@@ -1,8 +1,10 @@
 import threading
 import time
 from uuid import uuid4
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status as fast_status, Query
+from pydantic import BaseModel
 from core.auth import get_current_user_or_ak
 from core.db import DB
 from core.models.base import DATA_STATUS
@@ -519,6 +521,201 @@ async def get_articles(
                 message=f"获取文章列表失败: {str(e)}"
             )
         )
+
+@router.get("/pending-content", summary="查询正文未抓取的文章列表（供RPA等外部系统补齐内容）")
+async def list_pending_content(
+    limit: int = Query(10, ge=1, le=100, description="返回数量上限"),
+    mp_id: str = Query(None, description="按公众号ID过滤"),
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    """列出 has_content=0 且未删除、未被锁定的文章，按发布时间倒序。
+
+    此接口供 RPA 客户端（八爪鱼等外部系统）通过 Access Key
+    拉取待补齐正文的文章清单。
+
+    返回字段精简为 RPA 所需子集：id / title / url / mp_id /
+    mp_name / publish_time，不返回 content 等大字段以减少响应体积。
+    """
+    session = DB.get_session()
+    try:
+        query = session.query(ArticleBase).filter(
+            ArticleBase.has_content == 0,
+            ArticleBase.status != DATA_STATUS.FETCHING,
+            ArticleBase.status != DATA_STATUS.DELETED,
+        )
+        if mp_id:
+            query = query.filter(ArticleBase.mp_id == mp_id)
+        query = query.order_by(ArticleBase.publish_time.desc()).limit(limit)
+        results = query.all()
+
+        # 一次性查 Feed.mp_name，避免 N+1
+        from core.models.feed import Feed
+        mp_ids = list({a.mp_id for a in results if a.mp_id})
+        mp_name_map = {}
+        if mp_ids:
+            feeds = session.query(Feed).filter(Feed.id.in_(mp_ids)).all()
+            mp_name_map = {f.id: f.mp_name for f in feeds}
+
+        items = [
+            {
+                "id": a.id,
+                "title": a.title,
+                "url": a.url,
+                "mp_id": a.mp_id,
+                "mp_name": mp_name_map.get(a.mp_id, ""),
+                "publish_time": a.publish_time,
+            }
+            for a in results
+        ]
+
+        return success_response({
+            "list": items,
+            "count": len(items),
+            "limit": limit,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=fast_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response(
+                code=50001,
+                message=f"查询待抓取文章失败: {str(e)}"
+            )
+        )
+    finally:
+        session.close()
+
+
+class SubmitContentRequest(BaseModel):
+    """外部系统（八爪鱼RPA等）回写正文时的请求体。
+
+    所有字段可选。 ``content`` 与 ``deleted`` 至少需要其一,否则视为空操作返回 400。
+    """
+    content: Optional[str] = None
+    content_html: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    pic_url: Optional[str] = None
+    publish_time: Optional[int] = None
+    deleted: Optional[bool] = False
+
+
+@router.post("/{article_id}/content", summary="回写文章正文（供RPA等外部系统调用）")
+async def submit_article_content(
+    article_id: str,
+    payload: SubmitContentRequest,
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    """外部系统（八爪鱼RPA等）通过 Access Key 回写抓取到的正文。
+
+    行为约定:
+      * ``deleted=True``: 文章已被发布者删除。状态置 DELETED,has_content=0,
+        若仍带 content 也一并清空。
+      * ``content`` 非空: 写入正文,经 `fix_html` 处理得到 content_html(若
+        调用方已提供 content_html 则直接采用),status=ACTIVE,has_content=1,
+        重置 fix_fail_count 与 web_fetch_fail_count。
+      * 仅 ``content=""`` 或空 payload: 400,不做任何写库操作。
+
+    与现有 Playwright/Redfox 链路的关系: 写入成功后 has_content=1,
+    下次 Playwright 链路会跳过该文章,直到 has_content 被回退为 0。
+    """
+    session = DB.get_session()
+    try:
+        article = session.query(Article).filter(Article.id == article_id).first()
+        if not article:
+            raise HTTPException(
+                status_code=fast_status.HTTP_404_NOT_FOUND,
+                detail=error_response(code=40401, message="文章不存在"),
+            )
+
+        content = (payload.content or "") if payload.content is not None else None
+
+        if payload.deleted:
+            article.status = DATA_STATUS.DELETED
+            article.has_content = 0
+            article.content = ""
+            article.content_html = ""
+            if payload.title:
+                article.title = payload.title
+            if payload.pic_url:
+                article.pic_url = payload.pic_url
+            if payload.publish_time:
+                article.publish_time = payload.publish_time
+            if payload.description:
+                article.description = payload.description
+        elif content is not None:
+            # content 显式传入(包括空字符串) → 视为有效抓取结果
+            article.content = content
+            try:
+                if payload.content_html:
+                    article.content_html = payload.content_html
+                else:
+                    from tools.fix import fix_html
+                    article.content_html = fix_html(content)
+            except Exception as html_exc:
+                print_warning(f"fix_html failed for {article.id}: {html_exc}")
+                article.content_html = ""
+
+            article.status = DATA_STATUS.ACTIVE
+            article.has_content = 1
+            if payload.title:
+                article.title = payload.title
+            if payload.pic_url:
+                article.pic_url = payload.pic_url
+            if payload.publish_time:
+                article.publish_time = payload.publish_time
+            if payload.description:
+                article.description = payload.description
+            elif not (article.description or "").strip() and content:
+                # 仅在 RPA 没传且 DB 也为空时,用 Web.get_description 自动回填
+                try:
+                    from driver.wxarticle import Web
+                    article.description = Web.get_description(content)
+                except Exception:
+                    pass
+
+            # 修正成功 → 重置所有失败指标
+            article.fix_fail_count = 0
+            article.web_fetch_fail_count = 0
+        else:
+            raise HTTPException(
+                status_code=fast_status.HTTP_400_BAD_REQUEST,
+                detail=error_response(
+                    code=40001,
+                    message="content 与 deleted 至少需要其一",
+                ),
+            )
+
+        now_seconds = int(time.time())
+        now_millis = int(time.time() * 1000)
+        article.updated_at = now_seconds
+        article.updated_at_millis = now_millis
+        session.commit()
+
+        clear_cache_pattern("articles_list")
+        clear_cache_pattern("article_detail")
+        clear_cache_pattern("home_page")
+        clear_cache_pattern("tag_detail")
+
+        return success_response({
+            "article_id": article.id,
+            "has_content": int(article.has_content or 0),
+            "status": article.status,
+            "content_length": len(article.content or ""),
+            "updated_at": now_seconds,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=fast_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response(code=50001, message=f"回写正文失败: {str(e)}"),
+        )
+    finally:
+        session.close()
+
 
 @router.post("/{article_id}/refresh", summary="刷新单篇文章")
 async def refresh_article(
