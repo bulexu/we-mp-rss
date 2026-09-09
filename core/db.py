@@ -253,6 +253,15 @@ class Db:
             session.add(art)
             print_info(f"Added article: {art.id}")
             sta=session.commit()
+            # 回调: 异步推送到关联飞书多维表。
+            # 仅在「首次入库且带正文」时推,避免重复推送 (merge 去重路径不推)。
+            if (art.content or "").strip() and getattr(art, "status", None) != DATA_STATUS.DELETED:
+                try:
+                    from core.lark_push import lark_maybe_push
+
+                    lark_maybe_push(art.id)
+                except Exception as hook_exc:  # noqa: BLE001
+                    print_warning(f"add_article lark push hook failed: {hook_exc}")
         except Exception as e:
             session.rollback()  # 回滚事务，确保session状态正常
             if "UNIQUE" in str(e) or "Duplicate entry" in str(e):

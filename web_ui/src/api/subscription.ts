@@ -117,7 +117,7 @@ export const searchBiz = (kw: string, params: { page?: number; pageSize?: number
 }
 
 // 搜索公众号(不分页)
-export const searchMps = (kw: string, params: { page?: number; pageSize?: number }) => {
+export const searchMps = (kw: string, params: { offset?: number; limit?: number }) => {
   const apiParams = {
     kw:kw||"",
     offset: (params?.page || 0) * (params?.pageSize || 10),

@@ -698,6 +698,16 @@ async def submit_article_content(
         clear_cache_pattern("home_page")
         clear_cache_pattern("tag_detail")
 
+        # 回调: 异步推送到关联飞书多维表。session 即将让出,
+        # 内容非空且未被标记为 DELETED 时才推 (worker 内部也会再次检查)。
+        if article.status != DATA_STATUS.DELETED and (article.content or "").strip():
+            try:
+                from core.lark_push import lark_maybe_push
+
+                lark_maybe_push(article.id)
+            except Exception as exc:  # noqa: BLE001
+                print_warning(f"submit lark push hook failed: {exc}")
+
         return success_response({
             "article_id": article.id,
             "has_content": int(article.has_content or 0),

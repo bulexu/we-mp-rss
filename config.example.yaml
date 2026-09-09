@@ -152,6 +152,19 @@ redfox:
   # 请求超时（秒）
   timeout: ${REDFOX_TIMEOUT:-15}
 
+# 飞书多维表（Lark Bitable）推送配置
+# 用于在公众号文章完成正文抓取时，把内容推送到指定 Bitable 多维表归档
+# 凭据从 https://open.feishu.cn/app 创建「企业自建应用」获取 App ID / App Secret
+lark:
+  # 飞书应用 App ID，全局共用。通过环境变量 LARK_APP_ID 注入
+  app_id: ${LARK_APP_ID:-}
+  # 飞书应用 App Secret。通过环境变量 LARK_APP_SECRET 注入
+  app_secret: ${LARK_APP_SECRET:-}
+  # 全局启用开关，默认 False（关闭），开启后才会推送；具体每个 Bitable 行的 enabled 也需要为 True
+  enabled: ${LARK_ENABLED:-False}
+  # 请求飞书 API 超时（秒），默认 15
+  timeout: ${LARK_TIMEOUT:-15}
+
 #代理配置
 proxy:
   #是否启用代理 默认False

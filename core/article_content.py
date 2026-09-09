@@ -222,6 +222,14 @@ def sync_article_content(
         session.commit()
         session.refresh(article)
         print_info(f"article {article.id} content synced via {mode}")
+        # 回调: 异步推到关联飞书多维表 (worker 内部检查 mp_id / enabled / 幂等)。
+        # 这里 session 即将让出,  worker 会开自己的 session, 不冲突。
+        try:
+            from core.lark_push import lark_maybe_push
+
+            lark_maybe_push(article.id)
+        except Exception as exc:  # noqa: BLE001
+            print_warning(f"submit lark push hook failed: {exc}")
         return True, mode
     except Exception:
         # 修正失败,增加失败计数

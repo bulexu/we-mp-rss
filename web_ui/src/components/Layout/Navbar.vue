@@ -83,6 +83,12 @@
         </template>
         配置信息
       </a-menu-item>
+      <a-menu-item key="/lark/bitables">
+        <template #icon>
+          <icon-storage />
+        </template>
+        飞书多维表
+      </a-menu-item>
       <a-menu-item key="/sys-info">
         <template #icon>
           <icon-info-circle />

@@ -1,5 +1,5 @@
 from logging import info
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status as fast_status, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.background import BackgroundTasks
 from core.auth import get_current_user_or_ak
@@ -213,7 +213,7 @@ async def search_mp(
     except Exception as e:
         print(f"搜索公众号错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message=f"搜索公众号失败:{str(e)}",
@@ -244,7 +244,7 @@ async def get_mps(
                 "mp_cover": mp.mp_cover,
                 "mp_intro": mp.mp_intro,
                 "status": mp.status,
-                "created_at": mp.created_at.isoformat()
+                "created_at": mp.created_at.isoformat() if mp.created_at else None
             } for mp in mps]
         return success_response({
             "list": mps_list,
@@ -258,7 +258,7 @@ async def get_mps(
     except Exception as e:
         print(f"获取公众号列表错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="获取公众号列表失败"
@@ -275,7 +275,7 @@ async def add_featured_article(
         target_url = str(url or "").strip()
         if not target_url:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40001,
                     message="请输入文章链接"
@@ -283,7 +283,7 @@ async def add_featured_article(
             )
         if "mp.weixin.qq.com/s/" not in target_url:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40002,
                     message="请输入有效的公众号文章链接"
@@ -313,7 +313,7 @@ async def add_featured_article(
     except Exception as e:
         print(f"添加精选文章任务启动失败: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="添加精选文章失败"
@@ -330,7 +330,7 @@ async def get_featured_article_task_status(
         task = _featured_article_tasks.get(task_id)
     if not task:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=fast_status.HTTP_404_NOT_FOUND,
             detail=error_response(
                 code=40404,
                 message="任务不存在"
@@ -382,7 +382,7 @@ async def update_mps(
     except Exception as e:
         print(f"更新公众号文章: {str(e)}",e)
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message=f"更新公众号文章{str(e)}"
@@ -400,7 +400,7 @@ async def get_mp(
         mp = session.query(Feed).filter(Feed.id == mp_id).first()
         if not mp:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40401,
                     message="公众号不存在"
@@ -410,7 +410,7 @@ async def get_mp(
     except Exception as e:
         print(f"获取公众号详情错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="获取公众号详情失败"
@@ -426,7 +426,7 @@ async def get_mp_by_article(
         
         if not info:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40401,
                     message="公众号不存在"
@@ -436,7 +436,7 @@ async def get_mp_by_article(
     except Exception as e:
         print(f"获取公众号详情错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="请输入正确的公众号文章链接"
@@ -510,13 +510,13 @@ async def add_mp(
             "mp_intro": feed.mp_intro,
             "status": feed.status,
             "faker_id":mp_id,
-            "created_at": feed.created_at.isoformat()
+            "created_at": feed.created_at.isoformat() if feed.created_at else None
         })
     except Exception as e:
         session.rollback()
         print(f"添加公众号错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="添加公众号失败"
@@ -535,7 +535,7 @@ async def delete_mp(
         mp = session.query(Feed).filter(Feed.id == mp_id).first()
         if not mp:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40401,
                     message="订阅号不存在"
@@ -552,7 +552,7 @@ async def delete_mp(
         session.rollback()
         print(f"删除订阅号错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="删除订阅号失败"
@@ -574,7 +574,7 @@ async def update_mp_status(
         mp = session.query(Feed).filter(Feed.id == mp_id).first()
         if not mp:
             raise HTTPException(
-                status_code=status.HTTP_201_CREATED,
+                status_code=fast_status.HTTP_201_CREATED,
                 detail=error_response(
                     code=40401,
                     message="订阅号不存在"
@@ -602,7 +602,7 @@ async def update_mp_status(
         session.rollback()
         print(f"更新订阅号错误: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_201_CREATED,
+            status_code=fast_status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
                 message="更新订阅号失败"

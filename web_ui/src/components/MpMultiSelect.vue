@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import { searchMps } from '@/api/subscription'
 import type { MpItem } from '@/types/subscription'
 
@@ -21,10 +22,12 @@ const searchKeyword = ref('')
 const loading = ref(false)
 const mpList = ref<MpItem[]>([])
 const selectedMps = ref<MpItem[]>([])
-const currentPage = ref(0)
+const currentOffset = ref(0)
 const totalCount = ref(0)
 const hasMore = ref(true)
 const pageSize = 20
+// redfox 限制最多 5 页 (100 条),超过会触发 SDK 报错
+const maxOffset = 100
 
 const filteredMps = computed(() => {
   return mpList.value.filter(mp =>
@@ -37,44 +40,48 @@ const fetchMps = async (reset = true) => {
   loading.value = true
   try {
     if (reset) {
-      currentPage.value = 0
+      currentOffset.value = 0
       mpList.value = []
     }
-    
-    const res = await searchMps(searchKeyword.value, { 
-      page: currentPage.value,
-      pageSize: pageSize
+
+    const res = await searchMps(searchKeyword.value, {
+      offset: currentOffset.value,
+      limit: pageSize,
     })
-    
+
     // 将 API 返回的数据格式转换为组件内部使用的格式
     const mappedList = res.list.map((item: any) => ({
       id: item.mp_id || item.id,
       mp_name: item.mp_name,
       mp_cover: item.avatar || item.mp_cover
     }))
-    
+
     // 添加新加载的数据到列表，避免覆盖已有数据
     if (reset) {
       mpList.value = mappedList
     } else {
       // 合并数据，避免重复
-      const newMps = mappedList.filter(newMp => 
+      const newMps = mappedList.filter(newMp =>
         !mpList.value.some(existingMp => existingMp.id === newMp.id)
       )
       mpList.value = [...mpList.value, ...newMps]
     }
-    
+
     // 更新总数并判断是否还有更多数据
     totalCount.value = res.total || 0
-    hasMore.value = mpList.value.length < totalCount.value
-    
+    // 同时受前端 maxOffset 与 redfox 后端 5 页限制
+    hasMore.value = mpList.value.length < totalCount.value && currentOffset.value + pageSize < maxOffset
+
+  } catch (err: any) {
+    console.error('searchMps failed:', err)
+    Message.error('搜索公众号失败: ' + (err?.message || String(err)))
   } finally {
     loading.value = false
   }
 }
 
 const loadMore = async () => {
-  currentPage.value++
+  currentOffset.value += pageSize
   await fetchMps(false)
 }
 

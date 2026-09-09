@@ -226,9 +226,18 @@ const routes = [
         path: 'task-queue',
         name: 'TaskQueue',
         component: TaskQueueView,
-        meta: { 
+        meta: {
           requiresAuth: true,
-          permissions: ['admin'] 
+          permissions: ['admin']
+        }
+      },
+      {
+        path: 'lark/bitables',
+        name: 'LarkBitable',
+        component: () => import('@/views/LarkBitable.vue'),
+        meta: {
+          requiresAuth: true,
+          permissions: ['admin']
         }
       },
       {

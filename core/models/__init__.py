@@ -16,5 +16,7 @@ from .cascade_node import CascadeNode, CascadeSyncLog
 from .cascade_task_allocation import CascadeTaskAllocation
 # 导入过滤规则模型
 from .filter_rule import FilterRule
+# 导入飞书多维表配置模型
+from .lark_bitable import LarkBitable, ArticleLarkPush
 # 导入基础模型
 from .base import *
