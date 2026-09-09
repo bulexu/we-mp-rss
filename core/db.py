@@ -1,13 +1,40 @@
-from sqlalchemy import create_engine, Engine,Text,event, inspect, text
+from sqlalchemy import and_, create_engine, Engine, event, inspect, or_, text, Text
 from sqlalchemy.orm import sessionmaker, declarative_base,scoped_session
 from sqlalchemy import Column, Integer, String, DateTime
 from typing import Optional, List
+import re
 from .models import Feed, Article
 from .config import cfg
-from core.models.base import Base, DATA_STATUS  
+from core.models.base import Base, DATA_STATUS
 from core.print import print_warning,print_info,print_error,print_success
 # 声明基类
 # Base = declarative_base()
+
+
+# ---------------------------------------------------------------------------
+# mid 提取工具 (用于第三道去重,见 Db.add_article)
+# ---------------------------------------------------------------------------
+#
+# 背景:``Article.id`` 主键由 ``{mp_id}-{workUuid}`` 拼出,而 ``workUuid``
+# 是 redfox 内部标识,在 redfox 后台重算 metadata 时可能变化;
+# ``workUrl`` 里的 ``sn=`` 参数也会变。两者都不稳定。
+# mp.weixin.qq.com URL 里的 ``mid=`` 是微信侧文章全局 ID,跨 redfox
+# 调用稳定,因此作为第三道去重依据。
+# ---------------------------------------------------------------------------
+
+_MID_RE = re.compile(r"[?&]mid=(\d+)")
+
+
+def _extract_wechat_mid(url: str) -> str:
+    """从 mp.weixin.qq.com 类 URL 中提取 ``mid`` 参数。
+
+    失败 (空 URL / 非 mp URL / 缺 mid) 返回空字符串,调用方据此跳过
+    mid 这条 dedup 路径。
+    """
+    if not url:
+        return ""
+    m = _MID_RE.search(url)
+    return m.group(1) if m else ""
 
 class Db:
     connection_str: str=""
@@ -146,9 +173,31 @@ class Db:
             if art.id: # type: ignore
                art.id=f"{str(art.mp_id)}-{art.id}".replace("MP_WXS_","") # type: ignore
             if check_exist:
-                # 检查文章是否已存在
+                # 三道去重 (任一命中视为同一篇):
+                #   1. 主键 id 相等       —— 老 workUuid 命中
+                #   2. url 完全相等       —— workUrl 没变
+                #   3. mp_id + URL 含 mid —— workUuid 和 sn 都变了时兜底
+                # 第 3 道解决 redfox 后台重算 metadata 导致同一文章以不同
+                # workUuid/sn 二次入库的问题 (生产环境截图重现过)。
+                dedup_filters = [
+                    Article.id == art.id,
+                    Article.url == art.url,
+                ]
+                mid = _extract_wechat_mid(art.url or "")
+                if mid:
+                    # LIKE 模式两侧各加 & 防止误匹配:
+                    #   - 前置 &: 排除 __biz 等参数 (防御,mp URL 无 mid 子串)
+                    #   - 后置 &: 排除 mid=1234 误匹配 mid=12345 (123456&)
+                    # 注:mid 在 URL 末尾 (后面跟 #rd) 的边界情况极为罕见,
+                    # 99%+ 的真实 mp URL 都是 mid=&idx=&sn= 的格式,这里暂不覆盖。
+                    dedup_filters.append(
+                        and_(
+                            Article.mp_id == art.mp_id,
+                            Article.url.like(f"%&mid={mid}&%"),
+                        )
+                    )
                 existing_article = session.query(Article.id,Article.publish_time,Article.status,Article.show_type,Article.description,Article.title).filter(
-                    (Article.url == art.url) | (Article.id == art.id)
+                    or_(*dedup_filters)
                 ).first()
                 if existing_article is not None:
                     # 当更新时间和状态都相同时，不需要更新
@@ -157,12 +206,22 @@ class Db:
                     and existing_article.status!=DATA_STATUS.DELETED \
                     and art.title==existing_article.title: # type: ignore
                         return False
-                    
+
                     if art.content is None:
                         from tools.fix import fix_html
                         art.content_html = fix_html(art.content) # type: ignore
                         # 设置 has_content 字段
                         art.has_content = 1 if (art.content and art.content.strip()) else 0 # type: ignore
+
+                    # 第 3 道 (mid) 命中时,art.id 与 existing.id 不同 (workUuid 已变),
+                    # 直接 merge 会按新 id 再插一条重复。把 art.id 改成 existing.id,
+                    # merge 就会更新老行 (该 id 被 FK / RSS / 文章详情等引用)。
+                    if art.id != existing_article.id:
+                        print_warning(
+                            f"Article dedup via mid: rewriting id {art.id} -> {existing_article.id}"
+                        )
+                        art.id = existing_article.id
+
                     session.merge(art)  # 使用 merge 来更新现有记录
                     session.commit()
                     print_warning(f"Article already exists: {art.id}")
