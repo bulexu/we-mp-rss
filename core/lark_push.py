@@ -21,6 +21,8 @@ INSERT 主键冲突由 IntegrityError 兜底捕获。
 from __future__ import annotations
 
 import json
+import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +43,33 @@ from core.print import print_warning, print_info
 # daemon=True 跟随主进程退出, 不阻止进程关闭。
 _EXECUTOR: ThreadPoolExecutor | None = None
 _EXECUTOR_LOCK_IMPORTED = False
+
+
+def _lark_thread_excepthook(args):
+    """捕获 ThreadPoolExecutor 线程里漏出的异常, 打完整 traceback。
+
+    默认 ``threading.excepthook`` 只打 ``Exception in thread ...`` 一行,
+    对调试 worker 死因极不友好。这里补足 traceback。
+    """
+    print_warning(
+        f"[lark] uncaught exception in thread {args.thread.name!r}: "
+        f"{args.exc_value!r}"
+    )
+    traceback.print_exception(
+        type(args.exc_value), args.exc_value, args.exc_traceback
+    )
+
+
+# 仅设置一次, 避免 reload 时重复挂多个 hook。
+if not getattr(threading.excepthook, "_lark_hook_installed", False):
+    _orig_excepthook = threading.excepthook
+    def _patched_excepthook(args):
+        if args.thread.name and args.thread.name.startswith("lark-push"):
+            _lark_thread_excepthook(args)
+            return
+        _orig_excepthook(args)
+    _patched_excepthook._lark_hook_installed = True  # type: ignore[attr-defined]
+    threading.excepthook = _patched_excepthook
 
 
 def _get_executor() -> ThreadPoolExecutor:
@@ -121,23 +150,30 @@ def lark_maybe_push(article_id: str) -> None:
 def _push_article_job(article_id: str) -> None:
     """worker 线程执行的实际推送逻辑。"""
     print_info(f"[lark] worker start article_id={article_id}")
-    db = DB(tag="lark-push")
-    session = db.get_session()
+    session = DB.get_session()
     try:
+        # 直接复用模块级 DB 单例 (``core.db.DB`` 已经是 ``Db`` 实例, 不可再 ``()`` 调用)
+        print_info(f"[lark] worker db ready article_id={article_id}")
         article = session.query(Article).filter(Article.id == article_id).first()
         if not article:
+            print_info(f"[lark] skip: article {article_id} not found")
             return
         # 跳过被删除或正在抓取中的文章
         from core.models.base import DATA_STATUS
 
         if article.status == DATA_STATUS.DELETED:
+            print_info(f"[lark] skip: article {article_id} status=DELETED")
             return
         if not (article.content or "").strip():
             # 没正文不推, 避免空记录
+            print_info(
+                f"[lark] skip: article {article_id} content empty"
+            )
             return
 
         mp_id = getattr(article, "mp_id", None)
         if not mp_id:
+            print_info(f"[lark] skip: article {article_id} mp_id is empty")
             return
 
         # 一次性查全部 enabled Bitables, 在 Python 里按 mp_ids 过滤
@@ -148,6 +184,10 @@ def _push_article_job(article_id: str) -> None:
         )
         matched = [b for b in bitables if mp_id in b.get_mp_ids()]
         if not matched:
+            print_info(
+                f"[lark] skip: no matched bitable for article={article_id} "
+                f"mp_id={mp_id} (enabled_bitables={len(bitables)})"
+            )
             return
 
         feed = (
@@ -170,6 +210,11 @@ def _push_article_job(article_id: str) -> None:
             .all()
         )
         pushed_bitable_ids = {row.bitable_id for row in existing_rows}
+
+        print_info(
+            f"[lark] dispatch article={article_id} mp_id={mp_id} "
+            f"matched={len(matched)} already_pushed={len(pushed_bitable_ids)}"
+        )
 
         for bitable in matched:
             if bitable.id in pushed_bitable_ids:
