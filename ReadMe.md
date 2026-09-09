@@ -55,15 +55,18 @@ features and fixes in this branch belongs to bulexu and its contributors.
 
 #### Content production & distribution
 
-- WeChat Official Account content scraping and parsing (redfox search / ID
-  lookup / article list / HTML body)
+- **Article list**: fetched via [redfox.hk](https://redfox.hk) stateless
+  REST (search / ID lookup / article list)
+- **Article body**: in-system auto-degrade — **Playwright → optional
+  Redfox** (gated by `GATHER.CONTENT_REDFOX_FALLBACK`); **out-of-band
+  manual fallback** — Bazhuayu RPA (runs independently, configured inside
+  the Bazhuayu client). See "Article Scraping Strategy" below.
 - RSS feed generation (RSS 2.0 with optional CDATA / full-text / cover /
   custom page size)
 - Scheduled auto-update (configurable interval, default 10s)
 - Custom RSS title, description, cover, pagination size
 - Custom notification channels (DingTalk / WeChat work-bot / Feishu /
   Custom Webhook)
-- Configurable scraping model (`app` / `web` / `api`) — see `core/wx/model/`
 - HTML content filtering rules (global + per-account, priority 0-100)
 - **Markdown / DOCX / PDF / JSON** export
 
@@ -138,6 +141,132 @@ docker stop we-mp-rss && docker rm we-mp-rss
 docker pull crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:latest
 # re-run the docker run command above (data/ is on a host volume — preserved)
 ```
+
+---
+
+## Article Scraping Strategy
+
+The project applies a layered strategy for two distinct data types —
+**article list** and **article body** — keeping the main pipeline
+unattended while reserving human-in-the-loop fallback for the long tail.
+
+### Article list: redfox REST
+
+Account search, account metadata, and the article list (title /
+publish time / summary / cover / URL) all come from
+[redfox.hk](https://redfox.hk) stateless REST. No login session, no
+cookies. **`GATHER.MODEL` no longer affects the list phase.**
+
+| Concern | Endpoint |
+| --- | --- |
+| Search an account by keyword | `/story/api/gzh/data/searchUser` |
+| Get an account by ID | `/story/api/gzh/data/accountInfo` |
+| Get article list for an account | `/story/api/gzh/data/queryWorkList` |
+
+Full module map: [docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md).
+
+### Article body: Playwright + (optional Redfox) + Bazhuayu RPA (out-of-band)
+
+Body extraction is much harder than list fetching (anti-bot / IP rate
+limit / CAPTCHA / JS rendering). The strategy splits into two
+**independent** layers: **in-system auto-degrade** (Playwright + optional
+Redfox) and **out-of-band manual fallback** (Bazhuayu RPA, configured
+and run separately in the Bazhuayu client). The two layers are fully
+decoupled — the RPA does **not** participate in the auto-degrade
+decision.
+
+#### In-system auto-degrade (order depends on `GATHER.CONTENT_REDFOX_FALLBACK`)
+
+```
+                       ┌──────────────────────────────────────┐
+                       │  Body fetch — in-system auto-degrade  │
+                       └──────────────────────────────────────┘
+                                       │
+                                       ▼
+                       ┌──────────────────────────────────────┐
+   Tier 1 ──►  Playwright browser              │  driver/wxarticle.py
+              (default preferred, best compat) │  + driver/playwright_driver.py
+                       │                       │
+                       ▼                       │
+              fetched OK? ──── no ────►        │
+                       │                       │
+                       ▼                       │
+              ┌────────┴────────────┐          │
+              │                     │          │
+   GATHER.CONTENT_     True (default)│ False    │
+   REDFOX_FALLBACK=    ─► enable Tier 2 ──► skip Tier 2 ──► mark failed
+              │                     │          │
+              ▼                     │          │
+                       ┌──────────────────────────┐
+   Tier 2 ──►  redfox API for body   │  redfox.hk REST (optional, default on)
+              (fallback, no browser) │  triggered after N Playwright failures
+                       │              │
+                       ▼              │
+                  fetched OK?         │
+                       │              │
+                       ▼              │
+                  mark complete       │
+```
+
+**Decision logic**:
+
+| `GATHER.CONTENT_REDFOX_FALLBACK` | Call order | When to use |
+| --- | --- | --- |
+| `True` (**default**) | Playwright → redfox → complete / failed | Want maximum coverage; willing to spend redfox quota |
+| `False` | Playwright → complete / failed | Skip redfox quota usage; accept some articles with no body |
+
+#### Out-of-band manual fallback: Bazhuayu RPA (independent of auto-degrade)
+
+> Bazhuayu RPA does **not** participate in the auto-degrade decision. It
+> is configured and run **separately** inside the Bazhuayu client. It
+> uses Access Key to **retroactively** fill in `has_content=0` articles
+> that the system-internal chain could not get.
+
+**RPA application link**:
+**[Bazhuayu RPA application](https://rpa.bazhuayu.com/shareableLink/6aa1062894a41f8dcd647ff3)**
+
+| Tier | Trigger | Strengths | Limits |
+| --- | --- | --- | --- |
+| **Tier 1 · Playwright** | In-system, default preferred | Real browser rendering; handles JS, CAPTCHA, attention walls | Browser process overhead; high-frequency scraping triggers anti-bot |
+| **Tier 2 · redfox API** *(optional)* | In-system, after N Playwright failures | Stateless HTTP, low resource cost | Some heavily protected accounts return incomplete HTML; skipped when `CONTENT_REDFOX_FALLBACK=False` |
+| **Out-of-band · Bazhuayu RPA** | **Manually started**; retroactively writes `has_content=0` articles | Human-in-the-loop, can bypass any anti-bot | Must be configured and run inside the Bazhuayu client; fully decoupled from auto-degrade |
+
+#### AK endpoints for RPA write-back
+
+The Bazhuayu RPA uses Access Key to call two endpoints, **fully decoupled
+from the system scraping loop** — you can start/stop it independently:
+
+```bash
+# 1. Pull articles that need body content (has_content=0, not deleted)
+GET  /api/v1/wx/articles/pending-content?limit=10&mp_id=MP_WXS_xxx
+Authorization: AK-SK {ak}:{sk}
+
+# 2. Write the body content (or mark deleted)
+POST /api/v1/wx/articles/{article_id}/content
+Authorization: AK-SK {ak}:{sk}
+Content-Type: application/json
+{
+  "content": "<p>Body HTML / Markdown ...</p>",
+  "content_html": "<p>...</p>",      # Optional; auto-generated by fix_html if omitted
+  "title": "...",                     # Optional, overrides current title
+  "description": "...",               # Optional
+  "pic_url": "...",                   # Optional
+  "publish_time": 1735689600,         # Optional
+  "deleted": false                    # true marks the article as removed by its author
+}
+```
+
+> Steps: open the link above in the Bazhuayu client → fill in your
+> service's `BASE_URL` and Access Key → the RPA polls
+> `/pending-content` and POSTs results back to `/content`.
+
+#### Auto-retry mechanism (in-system, unrelated to RPA)
+
+With `GATHER.CONTENT_AUTO_CHECK=True`, the backend periodically re-feeds
+`has_content=0` articles into Tier 1 (Playwright). When the failure
+counter reaches the threshold (default 3), `web_fetch_fail_count` is
+incremented and the system **stops retrying Playwright** for that
+article, freeing the browser pool for others.
 
 ---
 
@@ -336,6 +465,7 @@ All variables are read by `core/config.py` and can be set in `config.yaml`
 | `GATHER.CONTENT_AUTO_CHECK` | `False` | Periodically backfill missing bodies |
 | `GATHER.CONTENT_AUTO_INTERVAL` | `59` | Backfill interval (minutes) |
 | `GATHER.CONTENT_MODE` | `web` | Content correction mode |
+| `GATHER.CONTENT_REDFOX_FALLBACK` | `True` | After Playwright fails, fall back to redfox API (`False` skips Tier 2) |
 | `MAX_PAGE` | `5` | Max pages per scraping run |
 | `SPAN_INTERVAL` | `10` | Scheduler tick interval (seconds) |
 | `ARTICLE.TRUE_DELETE` | `False` | Hard-delete vs. soft-delete articles |

@@ -52,12 +52,15 @@
 
 #### 内容生产与分发
 
-- 微信公众号内容抓取与解析(redfox 搜索 / ID 精确查询 / 作品列表 / HTML 正文)
+- **文章列表**:通过 [redfox.hk](https://redfox.hk) REST 无状态获取(搜索公众号 /
+  精确查询 / 作品列表)
+- **正文抓取**:**系统内自动降级** Playwright → 可选 Redfox(由
+  `GATHER.CONTENT_REDFOX_FALLBACK` 开关决定);**外挂人工兜底** 八爪鱼 RPA
+  (独立于系统降级,需在八爪鱼客户端单独配置)(详见下文「文章抓取策略」一节)
 - RSS 订阅源生成(RSS 2.0,支持 CDATA / 全文 / 封面 / 自定义分页大小)
 - 定时自动更新(间隔可配,默认 10s)
 - 自定义 RSS 标题、描述、封面、分页大小
 - 自定义通知渠道(钉钉 / 微信群机器人 / 飞书 / 自定义 Webhook)
-- 多种抓取模型(`app` / `web` / `api`)— 见 `core/wx/model/`
 - HTML 内容过滤规则(全局 + 公众号专属,优先级 0-100)
 - 支持 **Markdown / DOCX / PDF / JSON** 导出
 
@@ -127,6 +130,123 @@ docker stop we-mp-rss && docker rm we-mp-rss
 docker pull crpi-qp8hiqijfnilf93t.cn-hangzhou.personal.cr.aliyuncs.com/bulexu/we-mp-rss:latest  
 # 重新执行上面那条 docker run(data/ 挂在宿主机,数据不会丢)
 ```
+
+---
+
+## 文章抓取策略
+
+本项目对「列表 / 正文」两类数据采用分层策略,主链路无人值守,长尾兜底走人工。
+
+### 文章列表:redfox REST
+
+公众号搜索、账号信息、作品列表(标题 / 发布时间 / 摘要 / 封面 / URL)统一
+通过 [redfox.hk](https://redfox.hk) 无状态 REST 获取,无需登录态、无 cookie,
+**`GATHER.MODEL` 不再影响列表阶段**。
+
+| 用途 | 端点 |
+| --- | --- |
+| 按关键词搜索公众号 | `/story/api/gzh/data/searchUser` |
+| 按 ID 精确查询公众号 | `/story/api/gzh/data/accountInfo` |
+| 拉取公众号作品列表 | `/story/api/gzh/data/queryWorkList` |
+
+完整模块映射见 [docs/redfox/INTEGRATION.md](docs/redfox/INTEGRATION.md)。
+
+### 正文抓取:Playwright + (可选 Redfox) + 八爪鱼 RPA(外挂兜底)
+
+正文抓取难度远高于列表(微信风控 / IP 限频 / 验证码 / 内容渲染等)。本项目
+分两类:**系统内自动降级**(Playwright + 可选 Redfox)+ **外挂人工兜底**
+(八爪鱼 RPA,需要在八爪鱼客户端单独配置)。两者完全解耦,RPA **不**参与
+自动降级判断。
+
+#### 系统内自动降级(顺序由 `GATHER.CONTENT_REDFOX_FALLBACK` 决定)
+
+```
+                       ┌──────────────────────────────────────┐
+                       │  正文抓取 — 系统内自动降级              │
+                       └──────────────────────────────────────┘
+                                       │
+                                       ▼
+                       ┌──────────────────────────────────────┐
+   第 1 级 ──►  Playwright 浏览器渲染        │  driver/wxarticle.py
+              (默认首选, 兼容性最好)         │  + driver/playwright_driver.py
+                       │                     │
+                       ▼                     │
+              抓取成功? ──── 否 ────►        │
+                       │                     │
+                       ▼                     │
+              ┌────────┴──────────┐          │
+              │                   │          │
+   GATHER.CONTENT_   True (默认)    │ False    │
+   REDFOX_FALLBACK=  ─► 启用 Tier 2 ──► 跳过 Tier 2 ──► 标记失败
+              │                   │          │
+              ▼                   │          │
+                       ┌────────────────────────┐
+   第 2 级 ──►  redfox API 文章正文│  redfox.hk REST(可选, 默认开启)
+              (回退, 不耗浏览器) │  Playwright 失败次数达阈值后切换
+                       │          │
+                       ▼          │
+                  抓取成功?       │
+                       │          │
+                       ▼          │
+                  标记完成          │
+```
+
+**判断逻辑**:
+
+| `GATHER.CONTENT_REDFOX_FALLBACK` | 调用顺序 | 适用场景 |
+| --- | --- | --- |
+| `True`(**默认**) | Playwright → redfox → 完成 / 失败 | 想尽量拿全正文,可消耗 API 配额 |
+| `False` | Playwright → 直接完成 / 失败 | 不想消耗 redfox 配额,接受部分文章无正文 |
+
+#### 外挂人工兜底:八爪鱼 RPA(独立于系统自动降级)
+
+> 八爪鱼 RPA **不** 参与系统自动降级判断,需要在八爪鱼客户端单独配置、
+> 单独运行。它通过 Access Key 调用接口,**事后**回写 `has_content=0`
+> 的文章正文。
+
+**RPA 应用链接**:
+**[八爪鱼 RPA 应用](https://rpa.bazhuayu.com/shareableLink/6aa1062894a41f8dcd647ff3)**
+
+| 级别 | 触发方式 | 能力 | 限制 |
+| --- | --- | --- | --- |
+| **第 1 级 · Playwright** | 系统内自动,默认首选 | 真实浏览器渲染,JS / 验证码 / 关注墙全部能处理 | 占用浏览器进程,大规模抓取时性能受限;高频触发易被风控 |
+| **第 2 级 · redfox API** *(可选)* | 系统内自动,Playwright 失败 N 次后 | 无状态 HTTP 接口,资源消耗低 | 部分强风控公众号拿不到完整 HTML;`CONTENT_REDFOX_FALLBACK=False` 时跳过 |
+| **外挂 · 八爪鱼 RPA** | **人工启动**,事后回写 `has_content=0` 文章 | 真人远程操作,理论上可绕过所有风控 | 需在八爪鱼客户端单独配置运行;与系统自动降级解耦 |
+
+#### 配套 AK 接口(RPA 回写通道)
+
+八爪鱼 RPA 通过 Access Key 调用以下两个端点,**与系统抓取主循环完全解耦**,
+任何时候都可以单独启停:
+
+```bash
+# 1. 拉取待补齐正文的文章清单(has_content=0 且未删除)
+GET  /api/v1/wx/articles/pending-content?limit=10&mp_id=MP_WXS_xxx
+Authorization: AK-SK {ak}:{sk}
+
+# 2. 回写抓到的正文(或标记已删除)
+POST /api/v1/wx/articles/{article_id}/content
+Authorization: AK-SK {ak}:{sk}
+Content-Type: application/json
+{
+  "content": "<p>正文 HTML / Markdown...</p>",
+  "content_html": "<p>...</p>",     # 可选;缺省时由 fix_html 自动生成
+  "title": "...",                    # 可选,用于覆盖
+  "description": "...",              # 可选
+  "pic_url": "...",                  # 可选
+  "publish_time": 1735689600,        # 可选
+  "deleted": false                   # true 表示文章已被发布者删除
+}
+```
+
+> 使用步骤: 在八爪鱼客户端打开上述链接 → 填入本服务的 `BASE_URL` 与 AK →
+> 启动后该 RPA 会轮询 `/pending-content` 并把抓到的内容 POST 回 `/content`。
+
+#### 自动重试机制(系统内,与 RPA 无关)
+
+`GATHER.CONTENT_AUTO_CHECK=True` 启用后,后台会定期把 `has_content=0` 的
+文章重新喂给第 1 级 Playwright;失败计数达阈值(默认 3 次)后,该文章
+`web_fetch_fail_count` 累加,系统会**停止继续尝试 Playwright**,避免无
+意义占用。
 
 ---
 
@@ -315,6 +435,7 @@ docker buildx build --platform=linux/amd64 \
 | `GATHER.CONTENT_AUTO_CHECK` | `False` | 定期回填缺失的正文 |
 | `GATHER.CONTENT_AUTO_INTERVAL` | `59` | 回填间隔(分钟) |
 | `GATHER.CONTENT_MODE` | `web` | 内容修正模式 |
+| `GATHER.CONTENT_REDFOX_FALLBACK` | `True` | Playwright 失败后是否走 redfox API 兜底(`False` 则跳过 Tier 2) |
 | `MAX_PAGE` | `5` | 单次抓取最大页数 |
 | `SPAN_INTERVAL` | `10` | 定时任务执行间隔(秒) |
 | `ARTICLE.TRUE_DELETE` | `False` | 物理删除 vs 软删除 |
